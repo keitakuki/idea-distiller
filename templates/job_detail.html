@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }} - Idea Distillery{% endblock %}
+{% block content %}
+<h1>{{ job.festival or 'Job' }} {{ job.year or '' }} <span class="badge badge-{{ job.status }}">{{ job.status }}</span></h1>
+
+<div class="card">
+  <p><strong>Source:</strong> <a href="{{ job.source_url }}" target="_blank">{{ job.source_url }}</a></p>
+  <p><strong>Created:</strong> {{ job.created_at[:19] }}</p>
+  <p><strong>Updated:</strong> {{ job.updated_at[:19] }}</p>
+  {% if job.error %}
+  <p style="color: var(--danger);"><strong>Error:</strong> {{ job.error }}</p>
+  {% endif %}
+</div>
+
+<div class="flex gap-1 mb-1">
+  <form method="post" action="/jobs/{{ job.id }}/process" style="margin:0;">
+    <button type="submit" class="btn btn-sm btn-warning">Run LLM Processing</button>
+  </form>
+  <form method="post" action="/jobs/{{ job.id }}/export" style="margin:0;">
+    <button type="submit" class="btn btn-sm btn-success">Export to Obsidian</button>
+  </form>
+</div>
+
+<div id="progress" hx-get="/api/jobs/{{ job.id }}/status" hx-trigger="load, every 3s" hx-swap="innerHTML">
+</div>
+
+<h2>Campaigns ({{ campaigns|length }})</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Brand</th>
+      <th>Award</th>
+      <th>Scrape</th>
+      <th>LLM</th>
+      <th>Export</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in campaigns %}
+    <tr>
+      <td><a href="/campaigns/{{ c.id }}">{{ c.title or c.slug }}</a></td>
+      <td>{{ c.brand or '-' }}</td>
+      <td>{{ c.award_level or '-' }}</td>
+      <td><span class="badge badge-{{ c.scrape_status }}">{{ c.scrape_status }}</span></td>
+      <td><span class="badge badge-{{ c.llm_status }}">{{ c.llm_status }}</span></td>
+      <td><span class="badge badge-{{ c.export_status }}">{{ c.export_status }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not campaigns %}
+<div class="card text-muted mt-1">No campaigns scraped yet.</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Replace progress div content with live stats from API
+document.body.addEventListener('htmx:afterSwap', function(e) {
+  if (e.detail.target.id === 'progress') {
+    try {
+      const data = JSON.parse(e.detail.xhr.responseText);
+      let html = '<div class="card grid-3">';
+      html += `<div class="stat-card"><div class="value">${data.scraped}/${data.total}</div><div class="label">Scraped</div></div>`;
+      html += `<div class="stat-card"><div class="value">${data.processed}/${data.total}</div><div class="label">Processed</div></div>`;
+      html += `<div class="stat-card"><div class="value">${data.exported}/${data.total}</div><div class="label">Exported</div></div>`;
+      html += '</div>';
+      if (data.is_running) {
+        html += '<div class="progress-bar"><div class="fill" style="width:' + Math.round((data.scraped + data.processed + data.exported) / Math.max(data.total * 3, 1) * 100) + '%"></div></div>';
+      }
+      e.detail.target.innerHTML = html;
+    } catch(err) {}
+    // Stop polling if no longer running
+    try {
+      const data = JSON.parse(e.detail.xhr.responseText);
+      if (!data.is_running && data.status !== 'pending') {
+        e.detail.target.removeAttribute('hx-trigger');
+        htmx.process(e.detail.target);
+      }
+    } catch(err) {}
+  }
+});
+</script>
+{% endblock %}

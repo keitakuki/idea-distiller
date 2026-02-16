@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Idea Distillery{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="grid-3 mb-1">
+  <div class="card stat-card">
+    <div class="value">{{ jobs|length }}</div>
+    <div class="label">Jobs</div>
+  </div>
+  <div class="card stat-card">
+    <div class="value">{{ stats.get('calls', 0) }}</div>
+    <div class="label">LLM Calls</div>
+  </div>
+  <div class="card stat-card">
+    <div class="value">${{ "%.2f"|format(stats.get('total_cost', 0)) }}</div>
+    <div class="label">Total Cost</div>
+  </div>
+</div>
+
+<h2>New Job</h2>
+<div class="card">
+  <form method="post" action="/jobs">
+    <label for="source_url">Winners Page URL</label>
+    <input type="url" id="source_url" name="source_url" placeholder="https://www.lovethework.com/en/awards/winners-shortlists" required>
+
+    <div class="grid-3">
+      <div>
+        <label for="festival">Festival (optional)</label>
+        <input type="text" id="festival" name="festival" placeholder="Cannes Lions">
+      </div>
+      <div>
+        <label for="year">Year (optional)</label>
+        <input type="number" id="year" name="year" placeholder="2025">
+      </div>
+      <div>
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode">
+          <option value="full">Full Pipeline (Scrape → Process → Export)</option>
+          <option value="scrape">Scrape Only</option>
+        </select>
+      </div>
+    </div>
+
+    <button type="submit" class="btn">Start Job</button>
+  </form>
+</div>
+
+<h2>Jobs</h2>
+{% for job in jobs %}
+<div class="card">
+  <div class="flex gap-1" style="justify-content: space-between; align-items: center;">
+    <div>
+      <h3><a href="/jobs/{{ job.id }}">{{ job.festival or 'Job' }} {{ job.year or '' }}</a></h3>
+      <span class="text-muted" style="font-size:0.85rem;">{{ job.source_url[:80] }}{% if job.source_url|length > 80 %}...{% endif %}</span>
+    </div>
+    <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+  </div>
+  <div class="text-muted" style="font-size:0.8rem; margin-top:0.5rem;">
+    Created: {{ job.created_at[:19] }}
+  </div>
+</div>
+{% endfor %}
+{% if not jobs %}
+<div class="card text-muted">No jobs yet. Create one above to get started.</div>
+{% endif %}
+{% endblock %}

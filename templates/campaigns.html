@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Campaigns - Idea Distillery{% endblock %}
+{% block content %}
+<h1>All Campaigns ({{ campaigns|length }})</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Brand</th>
+      <th>Agency</th>
+      <th>Festival</th>
+      <th>Award</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in campaigns %}
+    <tr>
+      <td><a href="/campaigns/{{ c.id }}">{{ c.title or c.slug }}</a></td>
+      <td>{{ c.brand or '-' }}</td>
+      <td>{{ c.agency or '-' }}</td>
+      <td>{{ c.festival or '-' }} {{ c.year or '' }}</td>
+      <td>{{ c.award_level or '-' }}</td>
+      <td>
+        <span class="badge badge-{{ c.scrape_status }}">S</span>
+        <span class="badge badge-{{ c.llm_status }}">L</span>
+        <span class="badge badge-{{ c.export_status }}">E</span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not campaigns %}
+<div class="card text-muted">No campaigns yet. Start a job from the Dashboard.</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Prompt Templates - Idea Distillery{% endblock %}
+{% block content %}
+<h1>Prompt Templates</h1>
+<p class="text-muted mb-1">Edit LLM prompt templates used for campaign analysis. Changes take effect on the next processing run.</p>
+
+{% for p in prompts %}
+<div class="card">
+  <h3>{{ p.name }} <span class="text-muted" style="font-size:0.8rem;">v{{ p.version }}</span></h3>
+  <p class="text-muted" style="font-size:0.85rem; margin-bottom:0.75rem;">{{ p.description }}</p>
+  <form method="post" action="/prompts/{{ p.name }}">
+    <input type="hidden" name="description" value="{{ p.description }}">
+    <textarea name="template">{{ p.template }}</textarea>
+    <button type="submit" class="btn btn-sm">Save</button>
+  </form>
+</div>
+{% endfor %}
+
+{% if not prompts %}
+<div class="card text-muted">No prompt templates found. They will be loaded from prompts/*.yaml on first startup.</div>
+{% endif %}
+{% endblock %}

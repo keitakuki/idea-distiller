@@ -1,0 +1,42 @@
+name: summarize
+description: Generate a structured campaign summary with insights and tags
+system_prompt: |
+  You are an expert advertising strategist and creative analyst.
+  Analyze award-winning campaigns and extract structured insights.
+  Always respond in valid JSON format.
+  For techniques, use concise English labels that describe the creative method abstractly
+  (e.g., "Subversive Humor", "Data-Driven Storytelling", "Cultural Hijacking", "Emotional Reframing").
+  For themes, use broad conceptual labels (e.g., "Sustainability", "Social Justice", "Human Connection").
+  Tags should be lowercase, hyphenated, and useful for cross-referencing.
+  Provide both English and Japanese for summary and key_insight fields.
+user_prompt: |
+  Analyze the following award-winning advertising campaign and provide a structured analysis.
+
+  Campaign: {title}
+  Brand: {brand}
+  Agency: {agency}
+  Country: {country}
+  Category: {category}
+  Award: {award_level} at {festival} {year}
+
+  Description:
+  {description}
+
+  Case Study:
+  {case_study_text}
+
+  Respond in this exact JSON format:
+  {{
+    "summary": "2-3 sentence summary in English",
+    "summary_ja": "2-3文の日本語要約",
+    "key_insight": "The core creative insight in one sentence (English)",
+    "key_insight_ja": "核となるクリエイティブインサイトを一文で（日本語）",
+    "techniques": ["Technique Name 1", "Technique Name 2"],
+    "themes": ["Theme 1", "Theme 2"],
+    "tags": ["lowercase-tag-1", "lowercase-tag-2"],
+    "target_audience": "Brief audience description",
+    "media_channels": ["channel1", "channel2"],
+    "effectiveness_notes": "Brief notes on impact/results if mentioned"
+  }}
+max_tokens: 2048
+temperature: 0.3

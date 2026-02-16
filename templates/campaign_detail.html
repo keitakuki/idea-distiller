@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.title or 'Campaign' }} - Idea Distillery{% endblock %}
+{% block content %}
+<h1>{{ campaign.title or campaign.slug }}</h1>
+
+<div class="card">
+  <table>
+    <tr><th style="width:120px;">Brand</th><td>{{ campaign.brand or '-' }}</td></tr>
+    <tr><th>Agency</th><td>{{ campaign.agency or '-' }}</td></tr>
+    <tr><th>Country</th><td>{{ campaign.country or '-' }}</td></tr>
+    <tr><th>Category</th><td>{{ campaign.category or '-' }}</td></tr>
+    <tr><th>Award</th><td>{{ campaign.award_level or '-' }}</td></tr>
+    <tr><th>Festival</th><td>{{ campaign.festival or '-' }} {{ campaign.year or '' }}</td></tr>
+    <tr><th>Source</th><td><a href="{{ campaign.source_url }}" target="_blank">{{ campaign.source_url }}</a></td></tr>
+    <tr>
+      <th>Status</th>
+      <td>
+        <span class="badge badge-{{ campaign.scrape_status }}">Scrape: {{ campaign.scrape_status }}</span>
+        <span class="badge badge-{{ campaign.llm_status }}">LLM: {{ campaign.llm_status }}</span>
+        <span class="badge badge-{{ campaign.export_status }}">Export: {{ campaign.export_status }}</span>
+      </td>
+    </tr>
+  </table>
+</div>
+
+{% if data %}
+<h2>LLM Analysis</h2>
+
+{% if data.summary_ja %}
+<div class="card">
+  <h3>概要</h3>
+  <p>{{ data.summary_ja }}</p>
+</div>
+{% endif %}
+
+{% if data.summary %}
+<div class="card">
+  <h3>Summary</h3>
+  <p>{{ data.summary }}</p>
+</div>
+{% endif %}
+
+{% if data.key_insight_ja or data.key_insight %}
+<div class="card">
+  <h3>Key Insight</h3>
+  {% if data.key_insight_ja %}<p>{{ data.key_insight_ja }}</p>{% endif %}
+  {% if data.key_insight %}<p class="text-muted">{{ data.key_insight }}</p>{% endif %}
+</div>
+{% endif %}
+
+{% if data.techniques %}
+<div class="card">
+  <h3>Techniques</h3>
+  {% for t in data.techniques %}
+  <span class="badge" style="background: var(--accent-dim); margin: 0.15rem;">{{ t }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if data.themes %}
+<div class="card">
+  <h3>Themes</h3>
+  {% for t in data.themes %}
+  <span class="badge" style="background: #2e5034; margin: 0.15rem;">{{ t }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if data.media_channels %}
+<div class="card">
+  <h3>Media Channels</h3>
+  {% for ch in data.media_channels %}
+  <span class="badge badge-pending" style="margin: 0.15rem;">{{ ch }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if data.effectiveness_notes %}
+<div class="card">
+  <h3>Effectiveness</h3>
+  <p>{{ data.effectiveness_notes }}</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
