@@ -15,6 +15,32 @@ def _wikilink(title: str) -> str:
     return f"[[{title}]]"
 
 
+def _get_festival_year(c: dict) -> tuple[str, int | None]:
+    """Extract festival and year from campaign data, supporting awards array."""
+    awards = c.get("awards", [])
+    if awards:
+        return awards[0].get("festival", "Unknown"), awards[0].get("year")
+    return c.get("festival", "Unknown"), c.get("year")
+
+
+def _get_primary_award(c: dict) -> str:
+    """Get the highest award level from a campaign."""
+    awards = c.get("awards", [])
+    if awards:
+        order = {"Grand Prix": 0, "Gold": 1, "Silver": 2, "Bronze": 3}
+        best = min(awards, key=lambda a: order.get(a.get("level", ""), 99))
+        return best.get("level", "")
+    return c.get("award_level", "")
+
+
+def _get_categories(c: dict) -> str:
+    """Get comma-separated categories from awards."""
+    awards = c.get("awards", [])
+    if awards:
+        return ", ".join(dict.fromkeys(a.get("category", "") for a in awards if a.get("category")))
+    return c.get("category", "")
+
+
 def generate_all_indices(processed_dir: Path, vault_path: Path) -> None:
     """Generate all index/MOC notes from processed campaign data."""
     campaigns = []
@@ -34,14 +60,14 @@ def generate_all_indices(processed_dir: Path, vault_path: Path) -> None:
 
 
 def _generate_master_index(campaigns: list[dict], vault_path: Path) -> None:
-    """Generate the master Map of Content."""
     lines = ["# Idea Distillery\n"]
     lines.append(f"Total campaigns: {len(campaigns)}\n")
 
     # Group by festival+year
     by_festival: dict[str, list] = defaultdict(list)
     for c in campaigns:
-        key = f"{c.get('festival', 'Unknown')} {c.get('year', '')}"
+        fest, yr = _get_festival_year(c)
+        key = f"{fest} {yr or ''}".strip()
         by_festival[key].append(c)
 
     lines.append("## Festivals\n")
@@ -49,7 +75,6 @@ def _generate_master_index(campaigns: list[dict], vault_path: Path) -> None:
         lines.append(f"- {_wikilink(key)} ({len(by_festival[key])} campaigns)")
     lines.append("")
 
-    # Technique summary
     tech_count: dict[str, int] = defaultdict(int)
     for c in campaigns:
         for t in c.get("techniques", []):
@@ -60,7 +85,6 @@ def _generate_master_index(campaigns: list[dict], vault_path: Path) -> None:
         lines.append(f"- {_wikilink(tech)} ({count})")
     lines.append("")
 
-    # Theme summary
     theme_count: dict[str, int] = defaultdict(int)
     for c in campaigns:
         for t in c.get("themes", []):
@@ -78,12 +102,11 @@ def _generate_master_index(campaigns: list[dict], vault_path: Path) -> None:
 
 
 def _generate_festival_indices(campaigns: list[dict], vault_path: Path) -> None:
-    """Generate one note per festival+year."""
     by_festival: dict[str, list] = defaultdict(list)
     for c in campaigns:
-        key = f"{c.get('festival', 'Unknown')} {c.get('year', '')}"
-        by_festival[key.strip()] = by_festival.get(key.strip(), [])
-        by_festival[key.strip()].append(c)
+        fest, yr = _get_festival_year(c)
+        key = f"{fest} {yr or ''}".strip()
+        by_festival[key].append(c)
 
     out_dir = vault_path / "festivals"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -91,12 +114,11 @@ def _generate_festival_indices(campaigns: list[dict], vault_path: Path) -> None:
     for festival_key, clist in by_festival.items():
         lines = [f"# {festival_key}\n"]
 
-        # Group by award level
         by_award: dict[str, list] = defaultdict(list)
         for c in clist:
-            by_award[c.get("award_level", "Other")].append(c)
+            by_award[_get_primary_award(c) or "Other"].append(c)
 
-        for award_level in ["Grand Prix", "Gold", "Silver", "Bronze", "Shortlist", "Other"]:
+        for award_level in ["Grand Prix", "Gold", "Silver", "Bronze", "Other"]:
             if award_level not in by_award:
                 continue
             lines.append(f"## {award_level}\n")
@@ -104,10 +126,10 @@ def _generate_festival_indices(campaigns: list[dict], vault_path: Path) -> None:
                 slug = c.get("slug", "")
                 title = c.get("title", slug)
                 brand = c.get("brand", "")
-                category = c.get("category", "")
+                cats = _get_categories(c)
                 info = f" ({brand})" if brand else ""
-                if category:
-                    info += f" - {category}"
+                if cats:
+                    info += f" - {cats}"
                 lines.append(f"- [[{slug}|{title}]]{info}")
             lines.append("")
 
@@ -117,7 +139,6 @@ def _generate_festival_indices(campaigns: list[dict], vault_path: Path) -> None:
 
 
 def _generate_technique_notes(campaigns: list[dict], vault_path: Path) -> None:
-    """Generate one note per technique, linking to all campaigns using it."""
     tech_campaigns: dict[str, list] = defaultdict(list)
     for c in campaigns:
         for t in c.get("techniques", []):
@@ -134,14 +155,13 @@ def _generate_technique_notes(campaigns: list[dict], vault_path: Path) -> None:
             slug = c.get("slug", "")
             title = c.get("title", slug)
             brand = c.get("brand", "")
-            award = c.get("award_level", "")
-            year = c.get("year", "")
-            info = f" ({brand}, {award} {year})" if brand else ""
+            award = _get_primary_award(c)
+            _, yr = _get_festival_year(c)
+            info = f" ({brand}, {award} {yr})" if brand else ""
             lines.append(f"- [[{slug}|{title}]]{info}")
         lines.append("")
 
-        content = "\n".join(lines)
-        post = frontmatter.Post(content, **meta)
+        post = frontmatter.Post("\n".join(lines), **meta)
         out_path = out_dir / f"{tech}.md"
         out_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
@@ -149,7 +169,6 @@ def _generate_technique_notes(campaigns: list[dict], vault_path: Path) -> None:
 
 
 def _generate_theme_notes(campaigns: list[dict], vault_path: Path) -> None:
-    """Generate one note per theme, linking to all campaigns under it."""
     theme_campaigns: dict[str, list] = defaultdict(list)
     for c in campaigns:
         for t in c.get("themes", []):
@@ -166,13 +185,12 @@ def _generate_theme_notes(campaigns: list[dict], vault_path: Path) -> None:
             slug = c.get("slug", "")
             title = c.get("title", slug)
             brand = c.get("brand", "")
-            year = c.get("year", "")
-            info = f" ({brand}, {year})" if brand else ""
+            _, yr = _get_festival_year(c)
+            info = f" ({brand}, {yr})" if brand else ""
             lines.append(f"- [[{slug}|{title}]]{info}")
         lines.append("")
 
-        content = "\n".join(lines)
-        post = frontmatter.Post(content, **meta)
+        post = frontmatter.Post("\n".join(lines), **meta)
         out_path = out_dir / f"{theme}.md"
         out_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 

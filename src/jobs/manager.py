@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from src.config import settings
 from src.export.index import generate_all_indices
 from src.export.markdown import generate_campaign_note
-from src.llm.processor import process_campaigns, create_provider
+from src.llm.processor import process_campaigns
 from src.scraper.engine import scrape_campaigns
 from src.storage.database import Database
 from src.storage.files import load_json, list_json_files
@@ -27,32 +26,24 @@ class JobManager:
         return task is not None and not task.done()
 
     async def start_scrape(self, job_id: str) -> None:
-        """Start scraping for a job in the background."""
         if self.is_running(job_id):
             return
-        task = asyncio.create_task(self._run_scrape(job_id))
-        self._running_tasks[job_id] = task
+        self._running_tasks[job_id] = asyncio.create_task(self._run_scrape(job_id))
 
     async def start_process(self, job_id: str) -> None:
-        """Start LLM processing for a job in the background."""
         if self.is_running(job_id):
             return
-        task = asyncio.create_task(self._run_process(job_id))
-        self._running_tasks[job_id] = task
+        self._running_tasks[job_id] = asyncio.create_task(self._run_process(job_id))
 
     async def start_export(self, job_id: str) -> None:
-        """Start Markdown export for a job in the background."""
         if self.is_running(job_id):
             return
-        task = asyncio.create_task(self._run_export(job_id))
-        self._running_tasks[job_id] = task
+        self._running_tasks[job_id] = asyncio.create_task(self._run_export(job_id))
 
     async def start_full_pipeline(self, job_id: str) -> None:
-        """Run scrape → process → export sequentially."""
         if self.is_running(job_id):
             return
-        task = asyncio.create_task(self._run_full_pipeline(job_id))
-        self._running_tasks[job_id] = task
+        self._running_tasks[job_id] = asyncio.create_task(self._run_full_pipeline(job_id))
 
     async def _run_scrape(self, job_id: str) -> None:
         job = await self.db.get_job(job_id)
@@ -60,12 +51,20 @@ class JobManager:
             return
         await self.db.update_job(job_id, status="scraping")
         try:
-            # Find already scraped URLs for resume
+            # Find already scraped slugs for resume
             existing = await self.db.list_campaigns(job_id=job_id, scrape_status="scraped")
-            skip_urls = {c["source_url"] for c in existing}
+            skip_slugs = {c["slug"] for c in existing}
 
-            async for campaign, progress in scrape_campaigns(job["source_url"], job_id, skip_urls=skip_urls):
+            async for campaign, progress in scrape_campaigns(
+                job["source_url"],
+                job_id,
+                festival=job.get("festival") or "Cannes Lions",
+                year=job.get("year"),
+                skip_slugs=skip_slugs,
+            ):
                 if campaign:
+                    # Store primary award info in the DB row for display
+                    primary = campaign.awards[0] if campaign.awards else None
                     await self.db.create_campaign(
                         job_id=job_id,
                         source_url=campaign.url,
@@ -74,8 +73,8 @@ class JobManager:
                         brand=campaign.brand,
                         agency=campaign.agency,
                         country=campaign.country,
-                        category=campaign.category,
-                        award_level=campaign.award_level,
+                        category=campaign.categories_str,
+                        award_level=campaign.primary_award,
                         festival=campaign.festival,
                         year=campaign.year,
                         scrape_status="scraped",
@@ -94,7 +93,6 @@ class JobManager:
             raw_dir = settings.raw_dir / job_id
             async for processed, progress in process_campaigns(raw_dir, db=self.db):
                 if processed:
-                    # Update campaign LLM status
                     campaigns = await self.db.list_campaigns(job_id=job_id)
                     for c in campaigns:
                         if c["slug"] == processed.campaign_id:
@@ -120,19 +118,16 @@ class JobManager:
             if not vault_path or str(vault_path) == ".":
                 raise ValueError("OBSIDIAN_VAULT_PATH not configured")
 
-            # Export individual campaign notes
             for json_file in list_json_files(processed_dir):
                 data = load_json(json_file)
                 md_path = generate_campaign_note(data, vault_path)
 
-                # Update campaign export status
                 campaigns = await self.db.list_campaigns(job_id=job_id)
                 for c in campaigns:
                     if c["slug"] == json_file.stem:
                         await self.db.update_campaign(c["id"], export_status="exported", markdown_path=str(md_path))
                         break
 
-            # Generate index notes
             generate_all_indices(processed_dir, vault_path)
 
             await self.db.update_job(job_id, status="completed")

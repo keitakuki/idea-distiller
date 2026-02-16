@@ -6,13 +6,10 @@ from pathlib import Path
 
 import frontmatter
 
-from src.storage.files import load_json
-
 logger = logging.getLogger(__name__)
 
 
 def _slugify(text: str) -> str:
-    """Convert text to a safe filename/slug."""
     text = text.strip().lower()
     text = re.sub(r"[^\w\s-]", "", text)
     text = re.sub(r"[\s_]+", "-", text)
@@ -20,14 +17,42 @@ def _slugify(text: str) -> str:
 
 
 def _wikilink(title: str) -> str:
-    """Create an Obsidian wikilink."""
     return f"[[{title}]]"
+
+
+def _extract_awards_info(data: dict) -> tuple[list[dict], str, str, int | None]:
+    """Extract awards list and primary festival/year from data.
+
+    Returns (awards, primary_award_str, festival, year).
+    """
+    awards = data.get("awards", [])
+    festival = ""
+    year = None
+
+    if awards:
+        # awards is a list of dicts with level, category, subcategory, festival, year
+        festival = awards[0].get("festival", "")
+        year = awards[0].get("year")
+        order = {"Grand Prix": 0, "Gold": 1, "Silver": 2, "Bronze": 3}
+        best = min(awards, key=lambda a: order.get(a.get("level", ""), 99))
+        primary = best.get("level", "")
+    else:
+        # Legacy flat format fallback
+        festival = data.get("festival", "")
+        year = data.get("year")
+        primary = data.get("award_level", "")
+
+    return awards, primary, festival, year
 
 
 def generate_campaign_note(data: dict, vault_path: Path) -> Path:
     """Generate an Obsidian Markdown note for a single campaign."""
     title = data.get("title", data.get("slug", "Untitled"))
     slug = data.get("slug", _slugify(title))
+    awards, primary_award, festival, year = _extract_awards_info(data)
+
+    # Collect unique categories from awards
+    categories = list(dict.fromkeys(a.get("category", "") for a in awards if a.get("category")))
 
     # Build YAML frontmatter
     meta = {
@@ -35,16 +60,19 @@ def generate_campaign_note(data: dict, vault_path: Path) -> Path:
         "brand": data.get("brand", ""),
         "agency": data.get("agency", ""),
         "country": data.get("country", ""),
-        "festival": data.get("festival", ""),
-        "year": data.get("year"),
-        "category": data.get("category", ""),
-        "award": data.get("award_level", ""),
+        "festival": festival,
+        "year": year,
+        "categories": categories,
+        "award": primary_award,
+        "awards_detail": [
+            f"{a.get('level', '')} - {a.get('category', '')} ({a.get('subcategory', '')})"
+            for a in awards
+        ] if awards else [],
         "techniques": data.get("techniques", []),
         "themes": data.get("themes", []),
         "tags": data.get("tags", []),
         "source_url": data.get("url", ""),
     }
-    # Remove empty values from frontmatter
     meta = {k: v for k, v in meta.items() if v}
 
     # Build note body
@@ -57,12 +85,25 @@ def generate_campaign_note(data: dict, vault_path: Path) -> Path:
         info_parts.append(f"**Brand:** {data['brand']}")
     if data.get("agency"):
         info_parts.append(f"**Agency:** {data['agency']}")
-    if data.get("award_level") and data.get("festival"):
-        info_parts.append(f"**Award:** {data['award_level']}, {data.get('festival', '')} {data.get('year', '')}")
+    if primary_award and festival:
+        info_parts.append(f"**Award:** {primary_award}, {festival} {year or ''}")
     if info_parts:
         lines.append(" | ".join(info_parts) + "\n")
 
-    # Summary (Japanese first for the user, then English)
+    # Awards (all of them)
+    if len(awards) > 1:
+        lines.append("## Awards\n")
+        for a in awards:
+            level = a.get("level", "")
+            cat = a.get("category", "")
+            sub = a.get("subcategory", "")
+            detail = f"{level} — {cat}"
+            if sub:
+                detail += f" / {sub}"
+            lines.append(f"- {detail}")
+        lines.append("")
+
+    # Summary
     if data.get("summary_ja"):
         lines.append("## 概要\n")
         lines.append(data["summary_ja"] + "\n")
@@ -138,10 +179,9 @@ def generate_campaign_note(data: dict, vault_path: Path) -> Path:
         lines.append("")
 
     # Festival link
-    if data.get("festival") and data.get("year"):
+    if festival and year:
         lines.append("## Festival\n")
-        festival_year = f"{data['festival']} {data['year']}"
-        lines.append(f"- {_wikilink(festival_year)}\n")
+        lines.append(f"- {_wikilink(f'{festival} {year}')}\n")
 
     # Source
     if data.get("url"):

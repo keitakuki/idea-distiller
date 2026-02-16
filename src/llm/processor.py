@@ -38,9 +38,27 @@ def load_prompt_template(name: str) -> dict:
 
 def render_prompt(template_str: str, campaign_data: dict) -> str:
     """Render a prompt template with campaign data."""
-    # Use safe format that ignores missing keys and preserves JSON braces
+    # Build derived fields
+    data = dict(campaign_data)
+    # Generate human-readable awards summary from awards list
+    awards = data.get("awards", [])
+    if awards:
+        parts = []
+        for a in awards:
+            s = a.get("level", "")
+            if a.get("category"):
+                s += f" in {a['category']}"
+            if a.get("subcategory"):
+                s += f" / {a['subcategory']}"
+            if a.get("festival"):
+                s += f" at {a['festival']} {a.get('year', '')}"
+            parts.append(s.strip())
+        data["awards_summary"] = "; ".join(parts)
+    else:
+        data["awards_summary"] = "N/A"
+
     result = template_str
-    for key, value in campaign_data.items():
+    for key, value in data.items():
         placeholder = "{" + key + "}"
         result = result.replace(placeholder, str(value or "N/A"))
     return result

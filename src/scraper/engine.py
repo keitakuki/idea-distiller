@@ -1,7 +1,17 @@
+"""Scraping engine: orchestrates the two-level navigation.
+
+Flow:
+  1. Winners page → extract category links
+  2. Each category page → extract campaign entries (Grand Prix/Gold/Silver/Bronze only)
+  3. Merge duplicates (same campaign winning in multiple categories)
+  4. Each unique campaign detail page → scrape full content
+"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
@@ -10,8 +20,13 @@ from playwright.async_api import async_playwright
 
 from src.config import settings
 from src.scraper.auth import create_authenticated_context
-from src.scraper.models import ScrapedCampaign
-from src.scraper.parser import extract_campaign_links, parse_campaign_page
+from src.scraper.models import CampaignEntry, ScrapedCampaign
+from src.scraper.parser import (
+    extract_campaign_entries,
+    extract_category_links,
+    merge_campaign_entries,
+    parse_campaign_page,
+)
 from src.storage.files import save_json
 
 logger = logging.getLogger(__name__)
@@ -19,7 +34,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScrapeProgress:
-    total: int = 0
+    phase: str = "init"        # categories | collecting | scraping | done
+    total_categories: int = 0
+    scraped_categories: int = 0
+    total_campaigns: int = 0
     completed: int = 0
     failed: int = 0
     current_url: str = ""
@@ -27,24 +45,40 @@ class ScrapeProgress:
 
     @property
     def percent(self) -> int:
-        if self.total == 0:
+        if self.total_campaigns == 0:
             return 0
-        return int((self.completed + self.failed) / self.total * 100)
+        return int((self.completed + self.failed) / self.total_campaigns * 100)
+
+
+async def _human_delay(base: float = 2.0) -> None:
+    """Random delay to look human-like."""
+    delay = base + random.uniform(0.5, base * 0.8)
+    await asyncio.sleep(delay)
 
 
 async def scrape_campaigns(
     source_url: str,
     job_id: str,
+    festival: str = "Cannes Lions",
+    year: int | None = None,
     output_dir: Path | None = None,
-    skip_urls: set[str] | None = None,
+    skip_slugs: set[str] | None = None,
 ) -> AsyncIterator[tuple[ScrapedCampaign | None, ScrapeProgress]]:
-    """Scrape all campaigns from a winners/shortlist page.
+    """Scrape all award-winning campaigns from a winners page.
+
+    Two-level navigation:
+      Winners page → Category pages → Campaign detail pages
 
     Yields (campaign, progress) tuples. campaign is None on failure.
     """
     output_dir = output_dir or settings.raw_dir / job_id
-    skip_urls = skip_urls or set()
+    skip_slugs = skip_slugs or set()
     progress = ScrapeProgress()
+
+    # Determine festival slug from URL
+    festival_slug = "cannes-lions"
+    if "tab=" in source_url:
+        festival_slug = source_url.split("tab=")[-1].split("&")[0]
 
     async with async_playwright() as pw:
         context = await create_authenticated_context(
@@ -52,38 +86,78 @@ async def scrape_campaigns(
             state_dir=settings.playwright_state_dir,
             headless=settings.scraper_headless,
         )
-
         page = await context.new_page()
 
-        # Navigate to the winners listing page
-        logger.info(f"Navigating to {source_url}")
+        # --- Phase 1: Get category links ---
+        progress.phase = "categories"
+        logger.info(f"Phase 1: Extracting categories from {source_url}")
         await page.goto(source_url, wait_until="domcontentloaded")
-        # Human-like initial wait
-        await page.wait_for_timeout(3000 + int(settings.scraper_delay * 500))
+        await _human_delay(3.0)
 
-        # Scroll to load all content (some pages use infinite scroll)
-        prev_count = 0
-        for _ in range(10):
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(1500)
-            links = await extract_campaign_links(page)
-            if len(links) == prev_count:
-                break
-            prev_count = len(links)
+        categories = await extract_category_links(page, festival_slug)
+        progress.total_categories = len(categories)
 
-        campaign_links = await extract_campaign_links(page)
-        # Filter out already scraped URLs
-        campaign_links = [u for u in campaign_links if u not in skip_urls]
-        progress.total = len(campaign_links)
-        logger.info(f"Will scrape {progress.total} campaigns (skipping {len(skip_urls)} already done)")
+        if not categories:
+            logger.warning("No category links found!")
+            progress.phase = "done"
+            await page.close()
+            await context.close()
+            return
 
-        for url in campaign_links:
-            progress.current_url = url
+        # --- Phase 2: Collect campaign entries from all categories ---
+        progress.phase = "collecting"
+        all_entries: list[CampaignEntry] = []
+
+        for cat in categories:
+            progress.current_url = cat["url"]
             try:
-                await page.goto(url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(int(settings.scraper_delay * 1000))
+                logger.info(f"Collecting from category: {cat['name']}")
+                await page.goto(cat["url"], wait_until="domcontentloaded")
+                await _human_delay(settings.scraper_delay)
 
-                campaign = await parse_campaign_page(page, url)
+                # Scroll to load all content
+                for _ in range(5):
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(1.0)
+
+                entries = await extract_campaign_entries(
+                    page,
+                    category_name=cat["name"],
+                    festival=festival,
+                    year=year,
+                )
+                all_entries.extend(entries)
+                progress.scraped_categories += 1
+                logger.info(
+                    f"  [{progress.scraped_categories}/{progress.total_categories}] "
+                    f"{cat['name']}: {len(entries)} entries"
+                )
+
+            except Exception as e:
+                error_msg = f"Failed to collect from {cat['name']}: {e}"
+                progress.errors.append(error_msg)
+                logger.error(error_msg)
+
+            await _human_delay(1.5)
+
+        # Merge duplicates
+        unique_entries = merge_campaign_entries(all_entries)
+
+        # Filter out already scraped
+        unique_entries = [e for e in unique_entries if e.slug not in skip_slugs]
+        progress.total_campaigns = len(unique_entries)
+        logger.info(f"Phase 2 complete: {progress.total_campaigns} unique campaigns to scrape")
+
+        # --- Phase 3: Scrape each campaign detail page ---
+        progress.phase = "scraping"
+
+        for entry in unique_entries:
+            progress.current_url = entry.url
+            try:
+                await page.goto(entry.url, wait_until="domcontentloaded")
+                await _human_delay(settings.scraper_delay)
+
+                campaign = await parse_campaign_page(page, entry)
 
                 # Save raw data
                 data = campaign.model_dump()
@@ -92,54 +166,47 @@ async def scrape_campaigns(
                 save_json(output_dir / f"{campaign.slug}.json", data)
 
                 progress.completed += 1
-                logger.info(f"[{progress.completed}/{progress.total}] Scraped: {campaign.title or campaign.slug}")
+                logger.info(
+                    f"  [{progress.completed}/{progress.total_campaigns}] "
+                    f"Scraped: {campaign.title} ({campaign.primary_award})"
+                )
                 yield campaign, progress
 
             except Exception as e:
                 progress.failed += 1
-                error_msg = f"Failed to scrape {url}: {e}"
+                error_msg = f"Failed to scrape {entry.title or entry.url}: {e}"
                 progress.errors.append(error_msg)
                 logger.error(error_msg)
                 yield None, progress
 
+        progress.phase = "done"
         await page.close()
         await context.close()
-
-
-async def scrape_single(url: str) -> ScrapedCampaign:
-    """Scrape a single campaign page. Useful for testing."""
-    async with async_playwright() as pw:
-        context = await create_authenticated_context(
-            pw,
-            state_dir=settings.playwright_state_dir,
-            headless=settings.scraper_headless,
-        )
-        page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
-        campaign = await parse_campaign_page(page, url)
-        await page.close()
-        await context.close()
-        return campaign
 
 
 if __name__ == "__main__":
     import sys
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     if len(sys.argv) < 2:
-        print("Usage: python -m src.scraper.engine <URL> [job_id]")
+        print("Usage: python -m src.scraper.engine <winners_url> [job_id] [year]")
+        print("Example: python -m src.scraper.engine 'https://www.lovethework.com/en/awards/winners-shortlists?tab=cannes-lions' test 2025")
         sys.exit(1)
 
     url = sys.argv[1]
     job_id = sys.argv[2] if len(sys.argv) > 2 else "test"
+    year = int(sys.argv[3]) if len(sys.argv) > 3 else None
 
     async def _main():
-        async for campaign, progress in scrape_campaigns(url, job_id):
+        count = 0
+        async for campaign, progress in scrape_campaigns(url, job_id, year=year):
             if campaign:
-                print(f"  [{progress.completed}/{progress.total}] {campaign.title}")
+                count += 1
+                awards_str = ", ".join(f"{a.level} ({a.category})" for a in campaign.awards)
+                print(f"  [{count}/{progress.total_campaigns}] {campaign.title} — {awards_str}")
             else:
-                print(f"  [{progress.failed} failed] {progress.errors[-1]}")
+                print(f"  [FAILED] {progress.errors[-1]}")
+        print(f"\nDone: {count} campaigns scraped")
 
     asyncio.run(_main())

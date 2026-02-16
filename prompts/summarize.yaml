@@ -16,8 +16,7 @@ user_prompt: |
   Brand: {brand}
   Agency: {agency}
   Country: {country}
-  Category: {category}
-  Award: {award_level} at {festival} {year}
+  Awards: {awards_summary}
 
   Description:
   {description}

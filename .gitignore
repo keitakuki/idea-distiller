@@ -1,6 +1,7 @@
 # Runtime data
 data/
 *.sqlite3
+inbox/
 
 # Environment
 .env
