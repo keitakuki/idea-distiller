@@ -49,8 +49,6 @@ async def scrape_campaigns(
     async with async_playwright() as pw:
         context = await create_authenticated_context(
             pw,
-            email=settings.ltw_email,
-            password=settings.ltw_password,
             state_dir=settings.playwright_state_dir,
             headless=settings.scraper_headless,
         )
@@ -60,7 +58,8 @@ async def scrape_campaigns(
         # Navigate to the winners listing page
         logger.info(f"Navigating to {source_url}")
         await page.goto(source_url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
+        # Human-like initial wait
+        await page.wait_for_timeout(3000 + int(settings.scraper_delay * 500))
 
         # Scroll to load all content (some pages use infinite scroll)
         prev_count = 0
@@ -112,8 +111,6 @@ async def scrape_single(url: str) -> ScrapedCampaign:
     async with async_playwright() as pw:
         context = await create_authenticated_context(
             pw,
-            email=settings.ltw_email,
-            password=settings.ltw_password,
             state_dir=settings.playwright_state_dir,
             headless=settings.scraper_headless,
         )
