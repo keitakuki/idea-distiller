@@ -22,6 +22,8 @@ from src.config import settings
 from src.scraper.auth import create_authenticated_context
 from src.scraper.models import CampaignEntry, ScrapedCampaign
 from src.scraper.parser import (
+    _clear_filters_and_load,
+    _scroll_to_load_all,
     extract_campaign_entries,
     extract_category_links,
     merge_campaign_entries,
@@ -115,10 +117,11 @@ async def scrape_campaigns(
                 await page.goto(cat["url"], wait_until="domcontentloaded")
                 await _human_delay(settings.scraper_delay)
 
+                # Clear any pre-applied filters (site defaults to GP+Gold only)
+                await _clear_filters_and_load(page)
+
                 # Scroll to load all content
-                for _ in range(5):
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(1.0)
+                await _scroll_to_load_all(page)
 
                 entries = await extract_campaign_entries(
                     page,
