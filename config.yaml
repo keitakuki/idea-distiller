@@ -1,0 +1,20 @@
+llm:
+  provider: openai  # "anthropic" or "openai"
+  anthropic:
+    model: claude-sonnet-4-5-20250514
+  openai:
+    model: gpt-4o
+
+scraper:
+  delay_between_pages: 2.5  # seconds
+  max_retries: 3
+  headless: true
+  timeout: 30000  # ms
+
+export:
+  download_images: true
+  include_raw_html: false
+
+web:
+  host: 127.0.0.1
+  port: 8000
