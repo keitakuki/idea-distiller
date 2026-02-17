@@ -92,6 +92,30 @@ cd /Users/d21605/dev/lab/idea-distillery && python -m src.obsidian.index "/Users
 
 ---
 
+## リトライ（失敗したスクレイプの再取得）
+
+スクレイプで内容が取れなかったもの（`status: retry`）を再取得する。
+
+```bash
+cd /Users/d21605/dev/lab/idea-distillery && python -m src.scraper.cannes --retry cannes2025
+```
+
+- `inbox/` の `status: retry` ノートを読み、`source_url` に直接アクセス
+- タイムアウト60秒（通常の2倍）で再試行
+- 内容が取れたら inbox ノートを上書き（status → raw に戻る）
+- 内容が取れなければ「likely paywalled」としてログに記録
+- 再取得後、LLM処理 → インデックス生成 を再実行する:
+
+```bash
+# LLM処理（新たにstatus:rawになったノートを処理）
+cd /Users/d21605/dev/lab/idea-distillery && python -m src.llm.processor --vault "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"
+
+# インデックス再生成
+cd /Users/d21605/dev/lab/idea-distillery && python -m src.obsidian.index "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"
+```
+
+---
+
 ## 手動キャンペーン追加
 
 スクレイパーを使わず手動で追加する場合。

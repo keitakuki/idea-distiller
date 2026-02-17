@@ -260,6 +260,117 @@ async def scrape_campaigns(
         await context.close()
 
 
+async def retry_failed(
+    vault_path: Path,
+    job_id: str = "default",
+    output_dir: Path | None = None,
+    timeout: int = 60000,
+) -> AsyncIterator[tuple[ScrapedCampaign | None, ScrapeProgress]]:
+    """Re-scrape inbox notes with status: retry.
+
+    Reads source_url from each retry note, visits the detail page directly
+    (skipping listing pages), and overwrites the inbox note if successful.
+    Uses a longer timeout for pages that failed due to slow loading.
+    """
+    import frontmatter as fm
+
+    output_dir = output_dir or settings.raw_dir / job_id
+    images_dir = output_dir / "images"
+    progress = ScrapeProgress()
+
+    # Collect retry notes
+    inbox_dir = vault_path / "inbox"
+    retry_notes = []
+    for md_file in sorted(inbox_dir.glob("*.md")):
+        try:
+            post = fm.load(str(md_file))
+            if post.metadata.get("status") == "retry":
+                retry_notes.append({
+                    "path": md_file,
+                    "slug": post.metadata.get("slug", md_file.stem),
+                    "url": post.metadata.get("source_url", ""),
+                    "title": post.metadata.get("title", ""),
+                    "year": post.metadata.get("year"),
+                })
+        except Exception:
+            continue
+
+    retry_notes = [n for n in retry_notes if n["url"]]
+    progress.total_campaigns = len(retry_notes)
+    progress.phase = "scraping"
+    logger.info(f"Retrying {progress.total_campaigns} failed campaigns (timeout={timeout}ms)")
+
+    if not retry_notes:
+        return
+
+    async with async_playwright() as pw:
+        context = await create_authenticated_context(
+            pw,
+            state_dir=settings.playwright_state_dir,
+            headless=settings.scraper_headless,
+        )
+        page = await context.new_page()
+        page.set_default_timeout(timeout)
+
+        for note in retry_notes:
+            progress.current_url = note["url"]
+            entry = CampaignEntry(
+                url=note["url"],
+                slug=note["slug"],
+                title=note["title"],
+                year=note["year"],
+            )
+            try:
+                await page.goto(note["url"], wait_until="domcontentloaded", timeout=timeout)
+                await _human_delay(settings.scraper_delay)
+
+                campaign = await parse_campaign_page(page, entry)
+
+                # Check if we actually got content this time
+                if not campaign.description and not campaign.case_study_text:
+                    progress.failed += 1
+                    error_msg = f"Still no content for {note['slug']} (likely paywalled)"
+                    progress.errors.append(error_msg)
+                    logger.warning(error_msg)
+                    yield None, progress
+                    continue
+
+                # Download images
+                if settings.export_download_images:
+                    image_paths = await _download_campaign_images(campaign, images_dir)
+                    campaign.image_paths = image_paths
+
+                # Save raw data
+                data = campaign.model_dump()
+                if not settings.export_include_raw_html:
+                    data.pop("raw_html", None)
+                save_json(output_dir / f"{campaign.slug}.json", data)
+
+                # Overwrite inbox note
+                write_inbox_note(data, vault_path)
+                copy_images_to_vault(
+                    data.get("image_paths", []), output_dir, vault_path
+                )
+
+                progress.completed += 1
+                logger.info(
+                    f"  [{progress.completed}/{progress.total_campaigns}] "
+                    f"Retry OK: {campaign.title}"
+                )
+                yield campaign, progress
+
+            except Exception as e:
+                progress.failed += 1
+                error_msg = f"Retry failed for {note['slug']}: {e}"
+                progress.errors.append(error_msg)
+                logger.error(error_msg)
+                yield None, progress
+
+        progress.phase = "done"
+        await page.close()
+        await context.close()
+
+
 if __name__ == "__main__":
     import sys
 
@@ -267,19 +378,58 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("Usage: python -m src.scraper.cannes <year> [job_id] [max_pages]")
+        print("  or:  python -m src.scraper.cannes --retry [job_id]")
         print("  or:  python -m src.scraper.cannes --url <library_url> [job_id]")
         print()
         print("Examples:")
         print("  python -m src.scraper.cannes 2025")
-        print("  python -m src.scraper.cannes 2025 cannes2025 'cannes lions' 3")
+        print("  python -m src.scraper.cannes --retry cannes2025")
         sys.exit(1)
 
-    if sys.argv[1] == "--url":
+    if sys.argv[1] == "--retry":
+        job_id = sys.argv[2] if len(sys.argv) > 2 else "default"
+
+        async def _main_retry():
+            v_path = settings.vault_path
+            count = 0
+            async for campaign, progress in retry_failed(v_path, job_id=job_id):
+                if campaign:
+                    count += 1
+                    print(f"  [{count}/{progress.total_campaigns}] {campaign.title}")
+                else:
+                    print(f"  [FAILED] {progress.errors[-1]}")
+            print(f"\nDone: {progress.completed} recovered, {progress.failed} still failed")
+
+        asyncio.run(_main_retry())
+
+    elif sys.argv[1] == "--url":
         url = sys.argv[2]
         job_id = sys.argv[3] if len(sys.argv) > 3 else "test"
         year = None
         festival = "Cannes Lions"
         max_pages_arg = None
+
+        async def _main():
+            v_path = settings.vault_path if settings.obsidian_vault_path else None
+            count = 0
+            async for campaign, progress in scrape_campaigns(
+                source_url=url,
+                job_id=job_id,
+                festival=festival,
+                year=year,
+                max_pages=max_pages_arg,
+                vault_path=v_path,
+            ):
+                if campaign:
+                    count += 1
+                    imgs = len(campaign.image_paths) if campaign.image_paths else 0
+                    print(f"  [{count}/{progress.total_campaigns}] {campaign.title} ({imgs} images)")
+                else:
+                    print(f"  [FAILED] {progress.errors[-1]}")
+            print(f"\nDone: {count} campaigns scraped")
+
+        asyncio.run(_main())
+
     else:
         url = None
         year = int(sys.argv[1])
@@ -287,23 +437,23 @@ if __name__ == "__main__":
         festival = sys.argv[3] if len(sys.argv) > 3 else "Cannes Lions"
         max_pages_arg = int(sys.argv[4]) if len(sys.argv) > 4 else None
 
-    async def _main():
-        v_path = settings.vault_path if settings.obsidian_vault_path else None
-        count = 0
-        async for campaign, progress in scrape_campaigns(
-            source_url=url,
-            job_id=job_id,
-            festival=festival,
-            year=year,
-            max_pages=max_pages_arg,
-            vault_path=v_path,
-        ):
-            if campaign:
-                count += 1
-                imgs = len(campaign.image_paths) if campaign.image_paths else 0
-                print(f"  [{count}/{progress.total_campaigns}] {campaign.title} ({imgs} images)")
-            else:
-                print(f"  [FAILED] {progress.errors[-1]}")
-        print(f"\nDone: {count} campaigns scraped")
+        async def _main():
+            v_path = settings.vault_path if settings.obsidian_vault_path else None
+            count = 0
+            async for campaign, progress in scrape_campaigns(
+                source_url=url,
+                job_id=job_id,
+                festival=festival,
+                year=year,
+                max_pages=max_pages_arg,
+                vault_path=v_path,
+            ):
+                if campaign:
+                    count += 1
+                    imgs = len(campaign.image_paths) if campaign.image_paths else 0
+                    print(f"  [{count}/{progress.total_campaigns}] {campaign.title} ({imgs} images)")
+                else:
+                    print(f"  [FAILED] {progress.errors[-1]}")
+            print(f"\nDone: {count} campaigns scraped")
 
-    asyncio.run(_main())
+        asyncio.run(_main())
