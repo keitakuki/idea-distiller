@@ -18,9 +18,10 @@ build/
 # Playwright
 playwright-state/
 
-# IDE
+# IDE / tools
 .idea/
 .vscode/
+.claude/
 *.swp
 
 # OS
