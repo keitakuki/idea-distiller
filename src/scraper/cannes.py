@@ -147,7 +147,10 @@ async def scrape_campaigns(
         await page.goto(first_page_url, wait_until="domcontentloaded")
         await _human_delay(3.0)
 
-        # Get total pages from pagination
+        # Scroll first to load all content including pagination
+        await _scroll_to_load_all(page, max_rounds=10)
+
+        # Get total pages from pagination (must be after scroll)
         progress.total_pages = await get_total_pages(page)
         logger.info(f"Total pages: {progress.total_pages}")
 
@@ -155,7 +158,6 @@ async def scrape_campaigns(
             progress.total_pages = min(progress.total_pages, max_pages)
 
         # Scrape page 1
-        await _scroll_to_load_all(page, max_rounds=10)
         entries = await extract_library_campaigns(page)
         all_entries.extend(entries)
         progress.scraped_pages = 1
