@@ -183,7 +183,7 @@ async def check_session() -> None:
             ),
         )
         page = await context.new_page()
-        await page.goto("https://www.lovethework.com/en", wait_until="domcontentloaded")
+        await page.goto("https://www.lovethework.com/en", wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(3000)
 
         # Check for login indicators

@@ -172,9 +172,11 @@ def build_library_url(
         page: Page number for pagination.
     """
     tag_parts = []
-    if award_levels:
-        tag_parts.append("trophies@@award level")
     tag_parts.append("lions awards@@entry type")
+    if award_levels:
+        # Specific levels: GP, Titanium GP, Titanium, Gold, Silver, Bronze (exclude Shortlist)
+        for level in ["grand prix", "titanium grand prix", "titanium", "gold", "silver", "bronze"]:
+            tag_parts.append(f"trophies@@award level@@{level}")
     festival_encoded = festival.replace(" ", "+")
     tag_parts.append(f"award sources@@lions award@@{festival_encoded}")
     if year:
