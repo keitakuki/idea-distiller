@@ -21,16 +21,16 @@
 <h2>New Job</h2>
 <div class="card">
   <form method="post" action="/jobs">
-    <label for="source_url">Winners Page URL</label>
-    <input type="url" id="source_url" name="source_url" placeholder="https://www.lovethework.com/en/awards/winners-shortlists" required>
+    <label for="source_url">Campaign Library URL (optional - auto-built from festival/year if empty)</label>
+    <input type="url" id="source_url" name="source_url" placeholder="https://www.lovethework.com/en/work/campaigns?tag=...">
 
     <div class="grid-3">
       <div>
-        <label for="festival">Festival (optional)</label>
-        <input type="text" id="festival" name="festival" placeholder="Cannes Lions">
+        <label for="festival">Festival</label>
+        <input type="text" id="festival" name="festival" placeholder="Cannes Lions" value="Cannes Lions">
       </div>
       <div>
-        <label for="year">Year (optional)</label>
+        <label for="year">Year</label>
         <input type="number" id="year" name="year" placeholder="2025">
       </div>
       <div>

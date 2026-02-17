@@ -13,13 +13,19 @@ class LLMResponse(BaseModel):
 
 class ProcessedCampaign(BaseModel):
     campaign_id: str
-    summary: str = ""
-    summary_ja: str = ""
-    key_insight: str = ""
-    key_insight_ja: str = ""
+    # 3-level summary structure (Japanese only)
+    tagline: str = ""                  # 一行キャッチ (15字以内)
+    summary: str = ""                  # 概要 (1-2 sentences)
+    overview_background: str = ""      # 全体像-背景 (1-2 sentences)
+    overview_strategy: str = ""        # 全体像-戦略 (1-2 sentences)
+    overview_idea: str = ""            # 全体像-アイデア (1-2 sentences)
+    overview_outcome: str = ""         # 全体像-結果 (1-2 sentences)
+    background: str = ""              # 背景・課題 詳細 (200-400 chars)
+    strategy: str = ""                # 戦略 詳細 (200-400 chars)
+    idea: str = ""                    # アイデア 詳細 (200-400 chars)
+    outcome: str = ""                 # 結果・成果 詳細 (200-400 chars)
+    # Classification
     techniques: list[str] = []
+    technologies: list[str] = []
     themes: list[str] = []
     tags: list[str] = []
-    target_audience: str = ""
-    media_channels: list[str] = []
-    effectiveness_notes: str = ""

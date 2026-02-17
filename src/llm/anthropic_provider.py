@@ -7,11 +7,17 @@ from src.llm.provider import LLMProvider
 
 
 class AnthropicProvider(LLMProvider):
-    # Pricing per million tokens (as of 2025)
-    _INPUT_COST_PER_M = 3.0
-    _OUTPUT_COST_PER_M = 15.0
+    # Pricing per million tokens – default rates, overridden per model below
+    _INPUT_COST_PER_M = 1.0
+    _OUTPUT_COST_PER_M = 5.0
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5-20250514") -> None:
+    # Per-model pricing
+    _PRICING = {
+        "claude-haiku-4-5-20251001": (1.0, 5.0),
+        "claude-sonnet-4-5-20250929": (3.0, 15.0),
+    }
+
+    def __init__(self, api_key: str, model: str = "claude-haiku-4-5-20251001") -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
 
@@ -38,8 +44,11 @@ class AnthropicProvider(LLMProvider):
         )
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        return (input_tokens / 1_000_000 * self._INPUT_COST_PER_M
-                + output_tokens / 1_000_000 * self._OUTPUT_COST_PER_M)
+        in_cost, out_cost = self._PRICING.get(
+            self._model, (self._INPUT_COST_PER_M, self._OUTPUT_COST_PER_M)
+        )
+        return (input_tokens / 1_000_000 * in_cost
+                + output_tokens / 1_000_000 * out_cost)
 
     @property
     def provider_name(self) -> str:

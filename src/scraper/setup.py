@@ -6,6 +6,8 @@ Usage:
 
     # Step 2: Inspect a page - navigates to URL, saves screenshot + HTML
     python -m src.scraper.setup inspect <URL>
+    python -m src.scraper.setup inspect <URL> --tab entries   # Click Entries tab first
+    python -m src.scraper.setup inspect <URL> --tab credits   # Click Credits tab first
 
     # Step 3: Check saved session is still valid
     python -m src.scraper.setup check
@@ -15,11 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from pathlib import Path
 
 from playwright.async_api import async_playwright
 
 from src.config import settings
+from src.scraper.parser import _click_tab_and_wait
 
 STATE_DIR = settings.playwright_state_dir
 STATE_FILE = STATE_DIR / "auth_state.json"
@@ -63,8 +65,12 @@ async def manual_login() -> None:
         await browser.close()
 
 
-async def inspect_page(url: str) -> None:
-    """Navigate to a URL with saved session, save screenshot + HTML for debugging."""
+async def inspect_page(url: str, tab: str | None = None) -> None:
+    """Navigate to a URL with saved session, save screenshot + HTML for debugging.
+
+    Args:
+        tab: Optional tab to click before saving ("entries" or "credits").
+    """
     if not STATE_FILE.exists():
         print("No saved session found. Run 'python -m src.scraper.setup login' first.")
         return
@@ -86,12 +92,31 @@ async def inspect_page(url: str) -> None:
         print(f"Navigating to {url} ...")
         await page.goto(url, wait_until="domcontentloaded")
 
-        # Wait for dynamic content
-        print("Waiting for page to fully load (5s)...")
-        await page.wait_for_timeout(5000)
+        # Wait for Next.js hydration (JS event handlers to attach)
+        print("Waiting for page + JS to fully load...")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            print("  networkidle reached")
+        except Exception:
+            print("  networkidle timeout, waiting 10s fallback...")
+            await page.wait_for_timeout(10000)
+
+        # Click specific tab if requested
+        if tab:
+            tab_map = {"entries": "#tab-1", "credits": "#tab-2"}
+            tab_selector = tab_map.get(tab.lower())
+            if tab_selector:
+                print(f"Clicking {tab} tab ({tab_selector})...")
+                switched = await _click_tab_and_wait(page, tab_selector, timeout_s=20)
+                if switched:
+                    print("  Tab switched successfully (aria-selected=true)")
+                else:
+                    print("  Warning: tab did not switch. Page may still be loading.")
 
         # Generate safe filename from URL
         safe_name = url.split("//")[-1].replace("/", "_").replace("?", "_")[:80]
+        if tab:
+            safe_name += f"_tab_{tab}"
 
         # Save screenshot
         screenshot_path = DEBUG_DIR / f"{safe_name}.png"
@@ -118,6 +143,22 @@ async def inspect_page(url: str) -> None:
                 href = await link.get_attribute("href")
                 text = (await link.inner_text()).strip()[:60]
                 print(f"  {text} -> {href}")
+
+        # If inspecting entries tab, print table rows
+        if tab and tab.lower() == "entries":
+            print("\n--- Entries Tab Content ---")
+            rows = await page.query_selector_all("table tr")
+            print(f"  Table rows found: {len(rows)}")
+            for row in rows:
+                cells = await row.query_selector_all("td")
+                if not cells:
+                    continue
+                texts = []
+                for cell in cells:
+                    t = (await cell.inner_text()).strip().replace("ChevronRight", "").strip()
+                    texts.append(t)
+                if texts and texts[0] != "Name":
+                    print(f"  {' | '.join(texts)}")
 
         print(f"\nFiles saved in {DEBUG_DIR}/")
         print("Share the screenshot and/or HTML with Claude to fix selectors.")
@@ -166,9 +207,14 @@ def main():
         asyncio.run(manual_login())
     elif cmd == "inspect":
         if len(sys.argv) < 3:
-            print("Usage: python -m src.scraper.setup inspect <URL>")
+            print("Usage: python -m src.scraper.setup inspect <URL> [--tab entries|credits]")
             return
-        asyncio.run(inspect_page(sys.argv[2]))
+        tab_arg = None
+        if "--tab" in sys.argv:
+            tab_idx = sys.argv.index("--tab")
+            if tab_idx + 1 < len(sys.argv):
+                tab_arg = sys.argv[tab_idx + 1]
+        asyncio.run(inspect_page(sys.argv[2], tab=tab_arg))
     elif cmd == "check":
         asyncio.run(check_session())
     else:

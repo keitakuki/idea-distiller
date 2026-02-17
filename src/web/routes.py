@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from src.config import settings
-from src.storage.files import list_json_files, load_json
+import frontmatter
+
+from src.scraper.parser import build_library_url
+from src.storage.files import load_json
 
 router = APIRouter()
 
@@ -37,13 +39,19 @@ async def dashboard(request: Request, db=Depends(_get_db)):
 @router.post("/jobs")
 async def create_job(
     request: Request,
-    source_url: str = Form(...),
-    festival: str = Form(""),
+    source_url: str = Form(""),
+    festival: str = Form("Cannes Lions"),
     year: int = Form(None),
     mode: str = Form("full"),
     db=Depends(_get_db),
     jm=Depends(_get_jobs),
 ):
+    # Auto-build URL from festival/year if not provided
+    if not source_url:
+        source_url = build_library_url(
+            festival=festival.lower() if festival else "cannes lions",
+            year=year,
+        )
     job = await db.create_job(source_url=source_url, festival=festival or None, year=year)
     if mode == "full":
         await jm.start_full_pipeline(job["id"])
@@ -92,12 +100,18 @@ async def campaign_detail(request: Request, campaign_id: str, db=Depends(_get_db
     if not campaign:
         return HTMLResponse("Campaign not found", status_code=404)
 
-    # Load processed data if available
+    # Load processed data if available (JSON or vault Markdown)
     extra_data = {}
     if campaign.get("processed_path"):
         p = Path(campaign["processed_path"])
         if p.exists():
             extra_data = load_json(p)
+    if not extra_data and campaign.get("markdown_path"):
+        p = Path(campaign["markdown_path"])
+        if p.exists():
+            post = frontmatter.load(str(p))
+            extra_data = dict(post.metadata)
+            extra_data["content"] = post.content
 
     return templates.TemplateResponse("campaign_detail.html", {
         "request": request,
