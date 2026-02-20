@@ -25,7 +25,12 @@ class ProcessedCampaign(BaseModel):
     idea: str = ""                    # アイデア 詳細 (200-400 chars)
     outcome: str = ""                 # 結果・成果 詳細 (200-400 chars)
     # Classification
-    techniques: list[str] = []
-    technologies: list[str] = []
-    themes: list[str] = []
+    methods: list[str] = []
+    method_definitions: dict[str, str] = {}  # メソッド名→定義（新規メソッドの定義保存用）
     tags: list[str] = []
+    # 戦略構造 (Strategic DNA) — 別パスで抽出
+    strategic_essence: str = ""   # 課題の本質
+    insight: str = ""             # インサイト
+    strategic_shift: str = ""     # 戦略転換
+    mechanism: str = ""           # メカニズム
+    scale_factor: str = ""        # なぜスケールしたか

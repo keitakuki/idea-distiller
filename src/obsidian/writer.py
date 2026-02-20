@@ -17,6 +17,16 @@ import frontmatter
 logger = logging.getLogger(__name__)
 
 
+_AWARD_EMOJI = {
+    "Grand Prix": "🏆",
+    "Titanium Grand Prix": "🏆",
+    "Titanium": "🏆",
+    "Gold": "🥇",
+    "Silver": "🥈",
+    "Bronze": "🥉",
+}
+
+
 def _wikilink(title: str) -> str:
     return f"[[{title}]]"
 
@@ -148,6 +158,20 @@ def write_campaign_note(
     agency = raw_data.get("agency", "")
     country = raw_data.get("country", "")
 
+    # Structured awards list preserving level↔category mapping
+    awards_structured = [
+        {"level": a.get("level", ""), "category": a.get("category", "")}
+        for a in awards_raw
+        if a.get("level") and a.get("category")
+    ]
+
+    # Merge LLM tags with award category tags
+    llm_tags = list(llm_data.get("tags", []))
+    for cat in award_categories:
+        award_tag = "award/" + re.sub(r"[&:]+", "", cat).strip().lower().replace(" ", "-").replace("--", "-")
+        if award_tag not in llm_tags:
+            llm_tags.append(award_tag)
+
     meta = {
         "title": title,
         "slug": slug,
@@ -158,22 +182,18 @@ def write_campaign_note(
         "year": year,
         "award_levels": award_levels,
         "award_categories": award_categories,
+        "awards": awards_structured,
         "tagline": llm_data.get("tagline", ""),
-        "techniques": llm_data.get("techniques", []),
-        "technologies": llm_data.get("technologies", []),
-        "themes": llm_data.get("themes", []),
-        "tags": llm_data.get("tags", []),
+        "methods": llm_data.get("methods", []),
+        "tags": llm_tags,
         "source_url": raw_data.get("url", "") or raw_data.get("source_url", ""),
         "status": "processed",
     }
     meta = {k: v for k, v in meta.items() if v or k == "status"}
 
-    # Compact award summary for blockquote header
-    award_summary = _build_award_summary(awards_raw)
-
     lines = [f"# {title}\n"]
 
-    # Blockquote header
+    # Blockquote header: agency/brand/festival + award lines
     header_parts = []
     if agency:
         header_parts.append(agency)
@@ -186,8 +206,23 @@ def write_campaign_note(
 
     if header_parts:
         lines.append(f"> {' / '.join(header_parts)}")
-    if award_summary:
-        lines.append(f"> {award_summary}")
+
+    # Per-award lines with emoji + category
+    award_by_level = _group_awards_by_level(awards_raw)
+    if award_by_level:
+        for level in ["Grand Prix", "Titanium Grand Prix", "Titanium", "Gold", "Silver", "Bronze"]:
+            cats = award_by_level.get(level, [])
+            if not cats:
+                continue
+            emoji = _AWARD_EMOJI.get(level, "")
+            label = f"{emoji} {level}" if emoji else level
+            for cat in cats:
+                lines.append(f"> {label}: {cat}")
+    elif awards_raw:
+        # Fallback: no categories, just show level summary
+        award_summary = _build_award_summary(awards_raw)
+        if award_summary:
+            lines.append(f"> {award_summary}")
     lines.append("")
 
     # 概要 (Summary)
@@ -195,16 +230,7 @@ def write_campaign_note(
         lines.append("## 概要")
         lines.append(llm_data["summary"] + "\n")
 
-    # Award categories — right after概要 for context
-    award_by_level = _group_awards_by_level(awards_raw)
-    if award_by_level:
-        for level in ["Grand Prix", "Gold", "Silver", "Bronze"]:
-            cats = award_by_level.get(level, [])
-            if cats:
-                lines.append(f"**{level}**: {', '.join(cats)}")
-        lines.append("")
-
-    # Hero image — 1 image after概要+awards, rest in メディア at bottom
+    # Hero image — 1 image after概要, rest in メディア at bottom
     image_paths = raw_data.get("image_paths", [])
     remaining_images = image_paths[1:] if len(image_paths) > 1 else []
     if image_paths:
@@ -239,25 +265,29 @@ def write_campaign_note(
             lines.append(heading)
             lines.append(llm_data[key] + "\n")
 
-    # テクニック
-    if llm_data.get("techniques"):
-        lines.append("## テクニック")
-        for tech in llm_data["techniques"]:
-            lines.append(f"- {_wikilink(tech)}")
+    # 戦略構造 (Strategic DNA) — 別パスで抽出された場合のみ表示
+    strategic_fields = [
+        ("strategic_essence", "課題の本質"),
+        ("insight", "インサイト"),
+        ("strategic_shift", "戦略転換"),
+        ("mechanism", "メカニズム"),
+        ("scale_factor", "なぜスケールしたか"),
+    ]
+    strategic_parts = [
+        f"**{label}**: {llm_data[key]}"
+        for key, label in strategic_fields
+        if llm_data.get(key)
+    ]
+    if strategic_parts:
+        lines.append("## 戦略構造")
+        lines.extend(strategic_parts)
         lines.append("")
 
-    # テクノロジー
-    if llm_data.get("technologies"):
-        lines.append("## テクノロジー")
-        for t in llm_data["technologies"]:
-            lines.append(f"- {_wikilink(t)}")
-        lines.append("")
-
-    # テーマ
-    if llm_data.get("themes"):
-        lines.append("## テーマ")
-        for theme in llm_data["themes"]:
-            lines.append(f"- {_wikilink(theme)}")
+    # メソッド (wikilink化 — グラフビューのハブになる)
+    if llm_data.get("methods"):
+        lines.append("## メソッド")
+        for method in llm_data["methods"]:
+            lines.append(f"- {_wikilink(method)}")
         lines.append("")
 
     # メディア (videos + remaining images)
@@ -292,9 +322,9 @@ def write_campaign_note(
 
 
 def _build_award_summary(awards: list[dict]) -> str:
-    """Build a compact award summary for the blockquote header.
+    """Build a compact award summary with emoji for the blockquote header.
 
-    Groups by level and shows counts: "Grand Prix x3, Gold x2, Silver x4, Bronze x1"
+    Example: "🏆 Grand Prix x3, 🥇 Gold x2, 🥈 Silver x4"
     """
     from collections import Counter
 
@@ -302,19 +332,28 @@ def _build_award_summary(awards: list[dict]) -> str:
     if not level_counts:
         return ""
 
-    order = ["Grand Prix", "Gold", "Silver", "Bronze"]
+    order = ["Grand Prix", "Titanium Grand Prix", "Titanium", "Gold", "Silver", "Bronze"]
     parts = []
+    seen = set()
     for level in order:
         count = level_counts.get(level, 0)
-        if count == 1:
-            parts.append(level)
-        elif count > 1:
-            parts.append(f"{level} x{count}")
+        if count == 0:
+            continue
+        seen.add(level)
+        emoji = _AWARD_EMOJI.get(level, "")
+        label = f"{emoji} {level}" if emoji else level
+        if count > 1:
+            parts.append(f"{label} x{count}")
+        else:
+            parts.append(label)
 
     # Include any levels not in the standard order
     for level, count in level_counts.items():
-        if level not in order:
-            parts.append(f"{level} x{count}" if count > 1 else level)
+        if level in seen:
+            continue
+        emoji = _AWARD_EMOJI.get(level, "")
+        label = f"{emoji} {level}" if emoji else level
+        parts.append(f"{label} x{count}" if count > 1 else label)
 
     return ", ".join(parts)
 

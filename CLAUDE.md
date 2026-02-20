@@ -42,12 +42,11 @@ src/
 vault/
 ├── inbox/          # 未処理ノート（status: raw）。唯一の入力口
 ├── campaigns/      # 処理済みノート（status: processed）。3レベル日本語要約
-├── techniques/     # テクニックMOC（Wikilink）
-├── themes/         # テーマMOC（Wikilink）
+├── methods/        # メソッドMOC（Wikilink）
 ├── festivals/      # フェスティバル別インデックス
 ├── attachments/    # 画像ファイル
 ├── _Index.md       # マスターインデックス
-└── _tags.yaml      # タグマスターリスト
+└── _tags.yaml      # タグマスターリスト（methods dict + tags list の2軸）
 ```
 
 ## データフロー
@@ -55,7 +54,7 @@ vault/
 ```
 [ソース] → vault/inbox/{slug}.md (status: raw)
          → LLM処理 → vault/campaigns/{slug}.md (status: processed)
-         → インデックス生成 → techniques/, themes/, festivals/, _Index.md
+         → インデックス生成 → methods/, festivals/, _Index.md
 
 ※ data/raw/ にもJSON保存（バックアップ）
 ```
@@ -71,13 +70,19 @@ vault/
 2. **全体像**: 背景/戦略/アイデア/結果 各1-2文
 3. **詳細**: 背景/戦略/アイデア/結果 各200-400字
 
-## タグの命名規則
+## タグの命名規則（2軸構成）
 
 | 種類 | 形式 | 用途 | Obsidian |
 |---|---|---|---|
-| techniques | Title Case英語 | クリエイティブ手法 | `[[Wikilink]]` |
-| themes | Title Case英語 | 概念テーマ | `[[Wikilink]]` |
-| tags | kebab-case英語 | フィルタリング | frontmatter |
+| methods | Title Case英語 | クリエイティブ手法（1-2個/キャンペーン）。MOC生成 | `[[Wikilink]]` |
+| tags | kebab-case英語（ネスト構造） | 検索・フィルタリング（5-10個/キャンペーン） | frontmatter |
+
+### タグのプレフィックス
+- `tech/` — テクノロジー（tech/ai, tech/ar 等）
+- `industry/` — 業界・商材（industry/automotive 等）
+- `theme/` — 社会テーマ（theme/accessibility 等）
+- `channel/` — チャネル（channel/social-media 等）
+- プレフィックスなし — その他（humor, gen-z 等）
 
 ## 運用マニュアル
 
@@ -99,9 +104,7 @@ vault/
 # 生成物を削除（attachments/ と _tags.yaml は残す）
 rm -f "$VAULT"/inbox/*.md
 rm -f "$VAULT"/campaigns/*.md
-rm -f "$VAULT"/techniques/*.md
-rm -f "$VAULT"/technologies/*.md
-rm -f "$VAULT"/themes/*.md
+rm -f "$VAULT"/methods/*.md
 rm -f "$VAULT"/festivals/*.md
 rm -f "$VAULT"/_Index.md
 
@@ -150,6 +153,42 @@ python -m src.llm.processor --vault "$VAULT"
 - 既に `campaigns/` に同じslugがあればスキップ
 - `_tags.yaml` に新規タグを自動追記
 
+#### Step 2.5: 戦略DNA抽出（オプション）
+
+`campaigns/` の処理済みノートから戦略構造（Strategic DNA）を抽出。要約とは別のLLMパスで実行。
+
+```bash
+# テスト（5件）
+python -m src.llm.strategic_dna --vault "$VAULT" --limit 5
+
+# 全件
+python -m src.llm.strategic_dna --vault "$VAULT"
+```
+
+- 入力: 各キャンペーンの概要+全体像セクションのみ
+- 出力: `## 戦略構造` セクションを `## メソッド` の前に挿入
+- 既に戦略構造がある場合はスキップ
+- コスト: 約 $0.002/件（入力が短いため）
+
+#### Step 2.7: 和訳（オプション）
+
+`inbox/` の英文ソース（Description + Case Study）を GPT-4o-mini で日本語訳し、`campaigns/` ノートに `## 和訳` セクションとして挿入。
+
+```bash
+# テスト（5件）
+python -m src.llm.translator --vault "$VAULT" --limit 5
+
+# 全件
+python -m src.llm.translator --vault "$VAULT"
+```
+
+- モデル: GPT-4o-mini（設定に依存せず固定）
+- 入力: inbox ノートの Description + Case Study セクション
+- 出力: `## 和訳` セクションを `## メソッド` の前に挿入
+- 既に和訳がある場合はスキップ
+- inbox にノートがないキャンペーンもスキップ
+- コスト: 約 $0.0015/件
+
 #### Step 3: インデックス生成
 
 `campaigns/` のfrontmatterから各種MOC/インデックスを再生成。
@@ -159,11 +198,9 @@ python -m src.obsidian.index "$VAULT"
 ```
 
 生成物:
-- `_Index.md` — マスターインデックス（トップテクニック/テーマ一覧）
+- `_Index.md` — マスターインデックス（メソッド一覧）
 - `festivals/Cannes Lions 2025.md` — 賞レベル別キャンペーン一覧
-- `techniques/*.md` — テクニックMOC（使用キャンペーン一覧）
-- `technologies/*.md` — テクノロジーMOC
-- `themes/*.md` — テーマMOC
+- `methods/*.md` — メソッドMOC（使用キャンペーン一覧）
 
 ### 部分更新（追加スクレイプ）
 
@@ -219,6 +256,14 @@ python -m src.scraper.cannes --url '<library_url>' [job_id]
 # LLM処理
 python -m src.llm.processor --vault <vault_path>
 python -m src.llm.processor <raw_dir>              # レガシーJSON経由
+
+# 戦略DNA抽出
+python -m src.llm.strategic_dna --vault <vault_path>
+python -m src.llm.strategic_dna --vault <vault_path> --limit 5  # テスト用
+
+# 和訳（英文ソース → 日本語訳）
+python -m src.llm.translator --vault <vault_path>
+python -m src.llm.translator --vault <vault_path> --limit 5     # テスト用
 
 # インデックス
 python -m src.obsidian.index <vault_path>

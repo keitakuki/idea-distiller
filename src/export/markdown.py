@@ -87,8 +87,7 @@ def generate_campaign_note(data: dict, vault_path: Path, raw_dir: Path | None = 
             f"{a.get('level', '')} - {a.get('category', '')} ({a.get('subcategory', '')})"
             for a in awards
         ] if awards else [],
-        "techniques": data.get("techniques", []),
-        "themes": data.get("themes", []),
+        "methods": data.get("methods", []),
         "tags": data.get("tags", []),
         "source_url": data.get("url", ""),
     }
@@ -138,18 +137,11 @@ def generate_campaign_note(data: dict, vault_path: Path, raw_dir: Path | None = 
         if data.get("key_insight"):
             lines.append(f"*{data['key_insight']}*\n")
 
-    # Techniques
-    if data.get("techniques"):
-        lines.append("## Techniques\n")
-        for tech in data["techniques"]:
-            lines.append(f"- {_wikilink(tech)}")
-        lines.append("")
-
-    # Themes
-    if data.get("themes"):
-        lines.append("## Themes\n")
-        for theme in data["themes"]:
-            lines.append(f"- {_wikilink(theme)}")
+    # Methods
+    if data.get("methods"):
+        lines.append("## Methods\n")
+        for method in data["methods"]:
+            lines.append(f"- {_wikilink(method)}")
         lines.append("")
 
     # Description

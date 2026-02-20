@@ -69,45 +69,67 @@ def read_campaign_notes(vault_path: Path) -> list[dict]:
     return notes
 
 
-def read_tags_yaml(vault_path: Path) -> dict[str, list[str]]:
+def read_tags_yaml(vault_path: Path) -> dict:
     """Read _tags.yaml master tag list from vault root.
 
-    Returns dict with keys 'techniques', 'themes', 'tags'.
-    Returns empty lists if file doesn't exist.
+    Returns dict with keys 'methods' (dict: name→definition) and 'tags' (list).
     """
     import yaml
 
     tags_path = vault_path / "_tags.yaml"
     if not tags_path.exists():
-        return {"techniques": [], "technologies": [], "themes": [], "tags": []}
+        return {"methods": {}, "tags": []}
 
     try:
         with open(tags_path) as f:
             data = yaml.safe_load(f) or {}
+
+        methods_raw = data.get("methods", {})
+        # Support both dict {name: definition} and list [name, ...] formats
+        if isinstance(methods_raw, list):
+            methods = {m: "" for m in methods_raw}
+        elif isinstance(methods_raw, dict):
+            methods = methods_raw
+        else:
+            methods = {}
+
         return {
-            "techniques": data.get("techniques", []),
-            "technologies": data.get("technologies", []),
-            "themes": data.get("themes", []),
+            "methods": methods,
             "tags": data.get("tags", []),
         }
     except Exception as e:
         logger.warning(f"Failed to read _tags.yaml: {e}")
-        return {"techniques": [], "technologies": [], "themes": [], "tags": []}
+        return {"methods": {}, "tags": []}
 
 
-def update_tags_yaml(vault_path: Path, new_tags: dict[str, list[str]]) -> None:
-    """Merge new tags into _tags.yaml, preserving existing entries."""
+def update_tags_yaml(vault_path: Path, new_tags: dict) -> None:
+    """Merge new tags into _tags.yaml.
+
+    methods: auto-add with definitions from method_definitions dict.
+    tags: auto-merge as before.
+    """
     import yaml
 
     existing = read_tags_yaml(vault_path)
 
-    for key in ["techniques", "technologies", "themes", "tags"]:
-        current = set(existing.get(key, []))
-        additions = set(new_tags.get(key, []))
-        new_entries = additions - current
-        if new_entries:
-            logger.info(f"New {key}: {new_entries}")
-            existing[key] = sorted(current | additions)
+    # Methods: auto-add new methods with definitions
+    existing_method_names = set(existing.get("methods", {}).keys())
+    new_methods = set(new_tags.get("methods", []))
+    method_definitions = new_tags.get("method_definitions", {})
+    unknown_methods = new_methods - existing_method_names
+    if unknown_methods:
+        for method_name in unknown_methods:
+            definition = method_definitions.get(method_name, "")
+            existing["methods"][method_name] = definition
+            logger.info(f"New method added to _tags.yaml: {method_name}: {definition}")
+
+    # Tags: auto-merge
+    current_tags = set(existing.get("tags", []))
+    new_tag_entries = set(new_tags.get("tags", []))
+    added_tags = new_tag_entries - current_tags
+    if added_tags:
+        logger.info(f"New tags: {added_tags}")
+        existing["tags"] = sorted(current_tags | new_tag_entries)
 
     tags_path = vault_path / "_tags.yaml"
     with open(tags_path, "w") as f:

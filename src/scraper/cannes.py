@@ -215,7 +215,7 @@ async def scrape_campaigns(
         for entry in all_entries:
             progress.current_url = entry.url
             try:
-                await page.goto(entry.url, wait_until="domcontentloaded")
+                await page.goto(entry.url, wait_until="networkidle")
                 await _human_delay(settings.scraper_delay)
 
                 campaign = await parse_campaign_page(page, entry)
@@ -321,7 +321,7 @@ async def retry_failed(
                 year=note["year"],
             )
             try:
-                await page.goto(note["url"], wait_until="domcontentloaded", timeout=timeout)
+                await page.goto(note["url"], wait_until="networkidle", timeout=timeout)
                 await _human_delay(settings.scraper_delay)
 
                 campaign = await parse_campaign_page(page, entry)

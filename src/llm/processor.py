@@ -39,27 +39,44 @@ def load_prompt_template(name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _build_tags_context(tags_data: dict[str, list[str]]) -> str:
-    """Build the existing tags context string for prompt injection."""
-    if not any(tags_data.values()):
+def _build_methods_context(tags_data: dict) -> str:
+    """Build the methods master list context for prompt injection."""
+    methods = tags_data.get("methods", {})
+    if not methods:
         return ""
 
     lines = [
-        "## 既存タグリスト（以下のタグを優先的に使用してください。新規タグは本当に必要な場合のみ作成してください）"
+        "### メソッド・マスターリスト（以下から1-2個選択。どうしても当てはまらない場合のみ新規作成可）"
     ]
-    if tags_data.get("techniques"):
-        lines.append(f"既存テクニック: {', '.join(tags_data['techniques'])}")
-    if tags_data.get("technologies"):
-        lines.append(f"既存テクノロジー: {', '.join(tags_data['technologies'])}")
-    if tags_data.get("themes"):
-        lines.append(f"既存テーマ: {', '.join(tags_data['themes'])}")
-    if tags_data.get("tags"):
-        lines.append(f"既存タグ: {', '.join(tags_data['tags'])}")
+    for name, definition in methods.items():
+        if definition:
+            lines.append(f"- \"{name}\" — {definition}")
+        else:
+            lines.append(f"- \"{name}\"")
 
     return "\n".join(lines)
 
 
-def render_prompt(template_str: str, campaign_data: dict, tags_context: str = "") -> str:
+def _build_tags_context(tags_data: dict) -> str:
+    """Build the existing tags context string for prompt injection."""
+    tags = tags_data.get("tags", [])
+    if not tags:
+        return ""
+
+    lines = [
+        "### 既存タグリスト（以下から優先的に選択。なければ新規作成可）"
+    ]
+    lines.append(", ".join(tags))
+
+    return "\n".join(lines)
+
+
+def render_prompt(
+    template_str: str,
+    campaign_data: dict,
+    methods_context: str = "",
+    tags_context: str = "",
+) -> str:
     """Render a prompt template with campaign data."""
     data = dict(campaign_data)
     # Generate human-readable awards summary from awards list
@@ -80,7 +97,8 @@ def render_prompt(template_str: str, campaign_data: dict, tags_context: str = ""
         data["awards_summary"] = "N/A"
 
     result = template_str
-    # Replace tags context placeholder
+    # Replace context placeholders
+    result = result.replace("{existing_methods_context}", methods_context)
     result = result.replace("{existing_tags_context}", tags_context)
 
     for key, value in data.items():
@@ -121,6 +139,7 @@ async def process_from_vault(
 
     # Read existing tags for prompt injection
     tags_data = read_tags_yaml(vault_path)
+    methods_context = _build_methods_context(tags_data)
     tags_context = _build_tags_context(tags_data)
 
     # Read inbox notes
@@ -174,8 +193,8 @@ async def process_from_vault(
                     campaign_data["case_study_text"] = case_rest.strip()
 
             # Render prompts
-            system_prompt = render_prompt(template["system_prompt"], campaign_data, tags_context)
-            user_prompt = render_prompt(template["user_prompt"], campaign_data, tags_context)
+            system_prompt = render_prompt(template["system_prompt"], campaign_data, methods_context, tags_context)
+            user_prompt = render_prompt(template["user_prompt"], campaign_data, methods_context, tags_context)
 
             # Call LLM
             start = time.monotonic()
@@ -195,6 +214,25 @@ async def process_from_vault(
                 resp_content = resp_content.split("```")[1].split("```")[0].strip()
 
             parsed = json.loads(resp_content)
+            # Fallback: if LLM returns "techniques" instead of "methods", remap
+            if "techniques" in parsed and "methods" not in parsed:
+                parsed["methods"] = parsed.pop("techniques")
+            # Fallback: merge legacy technologies/themes into tags with prefixes
+            if "technologies" in parsed:
+                tech_tags = [f"tech/{t.lower().replace(' ', '-')}" for t in parsed.pop("technologies")]
+                parsed.setdefault("tags", []).extend(tech_tags)
+            if "themes" in parsed:
+                theme_tags = [f"theme/{t.lower().replace(' ', '-')}" for t in parsed.pop("themes")]
+                parsed.setdefault("tags", []).extend(theme_tags)
+            # Deduplicate tags
+            if "tags" in parsed:
+                parsed["tags"] = list(dict.fromkeys(parsed["tags"]))
+            # Build method_definitions from _tags.yaml, not from LLM output
+            existing_methods = tags_data.get("methods", {})
+            parsed["method_definitions"] = {
+                m: existing_methods.get(m, "")
+                for m in parsed.get("methods", [])
+            }
             processed = ProcessedCampaign(
                 campaign_id=slug,
                 **{k: v for k, v in parsed.items() if k in ProcessedCampaign.model_fields},
@@ -213,9 +251,8 @@ async def process_from_vault(
 
             # Update _tags.yaml with any new tags
             update_tags_yaml(vault_path, {
-                "techniques": processed.techniques,
-                "technologies": processed.technologies,
-                "themes": processed.themes,
+                "methods": processed.methods,
+                "method_definitions": processed.method_definitions,
                 "tags": processed.tags,
             })
 
@@ -281,9 +318,11 @@ async def process_campaigns(
     progress = ProcessProgress()
 
     # Read existing tags if vault is configured
+    methods_context = ""
     tags_context = ""
     if settings.obsidian_vault_path:
         tags_data = read_tags_yaml(settings.vault_path)
+        methods_context = _build_methods_context(tags_data)
         tags_context = _build_tags_context(tags_data)
 
     json_files = sorted(raw_dir.glob("*.json"))
@@ -300,8 +339,8 @@ async def process_campaigns(
             campaign_data = load_json(json_file)
 
             # Render prompts
-            system_prompt = render_prompt(template["system_prompt"], campaign_data, tags_context)
-            user_prompt = render_prompt(template["user_prompt"], campaign_data, tags_context)
+            system_prompt = render_prompt(template["system_prompt"], campaign_data, methods_context, tags_context)
+            user_prompt = render_prompt(template["user_prompt"], campaign_data, methods_context, tags_context)
 
             # Call LLM
             start = time.monotonic()
@@ -321,6 +360,9 @@ async def process_campaigns(
                 resp_content = resp_content.split("```")[1].split("```")[0].strip()
 
             parsed = json.loads(resp_content)
+            # Fallback: if LLM returns "techniques" instead of "methods", remap
+            if "techniques" in parsed and "methods" not in parsed:
+                parsed["methods"] = parsed.pop("techniques")
             processed = ProcessedCampaign(
                 campaign_id=json_file.stem,
                 **{k: v for k, v in parsed.items() if k in ProcessedCampaign.model_fields},
@@ -333,8 +375,8 @@ async def process_campaigns(
             # Update tags if vault is configured
             if settings.obsidian_vault_path:
                 update_tags_yaml(settings.vault_path, {
-                    "techniques": processed.techniques,
-                    "themes": processed.themes,
+                    "methods": processed.methods,
+                    "method_definitions": processed.method_definitions,
                     "tags": processed.tags,
                 })
 

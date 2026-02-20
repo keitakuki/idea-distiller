@@ -53,8 +53,7 @@ def generate_all_indices(processed_dir: Path, vault_path: Path) -> None:
 
     _generate_master_index(campaigns, vault_path)
     _generate_festival_indices(campaigns, vault_path)
-    _generate_technique_notes(campaigns, vault_path)
-    _generate_theme_notes(campaigns, vault_path)
+    _generate_method_notes(campaigns, vault_path)
 
     logger.info(f"Generated all index notes in {vault_path}")
 
@@ -75,24 +74,14 @@ def _generate_master_index(campaigns: list[dict], vault_path: Path) -> None:
         lines.append(f"- {_wikilink(key)} ({len(by_festival[key])} campaigns)")
     lines.append("")
 
-    tech_count: dict[str, int] = defaultdict(int)
+    method_count: dict[str, int] = defaultdict(int)
     for c in campaigns:
-        for t in c.get("techniques", []):
-            tech_count[t] += 1
+        for m in c.get("methods", []):
+            method_count[m] += 1
 
-    lines.append("## Top Techniques\n")
-    for tech, count in sorted(tech_count.items(), key=lambda x: -x[1])[:20]:
-        lines.append(f"- {_wikilink(tech)} ({count})")
-    lines.append("")
-
-    theme_count: dict[str, int] = defaultdict(int)
-    for c in campaigns:
-        for t in c.get("themes", []):
-            theme_count[t] += 1
-
-    lines.append("## Top Themes\n")
-    for theme, count in sorted(theme_count.items(), key=lambda x: -x[1])[:20]:
-        lines.append(f"- {_wikilink(theme)} ({count})")
+    lines.append("## Methods\n")
+    for method, count in sorted(method_count.items(), key=lambda x: -x[1]):
+        lines.append(f"- {_wikilink(method)} ({count})")
     lines.append("")
 
     out_path = vault_path / "_Index.md"
@@ -138,19 +127,19 @@ def _generate_festival_indices(campaigns: list[dict], vault_path: Path) -> None:
         logger.info(f"Generated festival index: {out_path}")
 
 
-def _generate_technique_notes(campaigns: list[dict], vault_path: Path) -> None:
-    tech_campaigns: dict[str, list] = defaultdict(list)
+def _generate_method_notes(campaigns: list[dict], vault_path: Path) -> None:
+    method_campaigns: dict[str, list] = defaultdict(list)
     for c in campaigns:
-        for t in c.get("techniques", []):
-            tech_campaigns[t].append(c)
+        for m in c.get("methods", []):
+            method_campaigns[m].append(c)
 
-    out_dir = vault_path / "techniques"
+    out_dir = vault_path / "methods"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for tech, clist in sorted(tech_campaigns.items()):
-        meta = {"type": "technique", "tags": ["technique"]}
-        lines = [f"# {tech}\n"]
-        lines.append("## Campaigns Using This Technique\n")
+    for method, clist in sorted(method_campaigns.items()):
+        meta = {"type": "method", "tags": ["method"]}
+        lines = [f"# {method}\n"]
+        lines.append("## このメソッドを使ったキャンペーン\n")
         for c in clist:
             slug = c.get("slug", "")
             title = c.get("title", slug)
@@ -162,39 +151,10 @@ def _generate_technique_notes(campaigns: list[dict], vault_path: Path) -> None:
         lines.append("")
 
         post = frontmatter.Post("\n".join(lines), **meta)
-        out_path = out_dir / f"{tech}.md"
+        out_path = out_dir / f"{method}.md"
         out_path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
-    logger.info(f"Generated {len(tech_campaigns)} technique notes")
-
-
-def _generate_theme_notes(campaigns: list[dict], vault_path: Path) -> None:
-    theme_campaigns: dict[str, list] = defaultdict(list)
-    for c in campaigns:
-        for t in c.get("themes", []):
-            theme_campaigns[t].append(c)
-
-    out_dir = vault_path / "themes"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    for theme, clist in sorted(theme_campaigns.items()):
-        meta = {"type": "theme", "tags": ["theme"]}
-        lines = [f"# {theme}\n"]
-        lines.append("## Campaigns Under This Theme\n")
-        for c in clist:
-            slug = c.get("slug", "")
-            title = c.get("title", slug)
-            brand = c.get("brand", "")
-            _, yr = _get_festival_year(c)
-            info = f" ({brand}, {yr})" if brand else ""
-            lines.append(f"- [[{slug}|{title}]]{info}")
-        lines.append("")
-
-        post = frontmatter.Post("\n".join(lines), **meta)
-        out_path = out_dir / f"{theme}.md"
-        out_path.write_text(frontmatter.dumps(post), encoding="utf-8")
-
-    logger.info(f"Generated {len(theme_campaigns)} theme notes")
+    logger.info(f"Generated {len(method_campaigns)} method notes")
 
 
 if __name__ == "__main__":

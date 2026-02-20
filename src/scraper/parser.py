@@ -174,8 +174,8 @@ def build_library_url(
     tag_parts = []
     tag_parts.append("lions awards@@entry type")
     if award_levels:
-        # Specific levels: GP, Titanium GP, Titanium, Gold, Silver, Bronze (exclude Shortlist)
-        for level in ["grand prix", "titanium grand prix", "titanium", "gold", "silver", "bronze"]:
+        # Specific levels: GP, Titanium GP, Titanium, Gold, Silver (exclude Bronze & Shortlist)
+        for level in ["grand prix", "titanium grand prix", "titanium", "gold", "silver"]:
             tag_parts.append(f"trophies@@award level@@{level}")
     festival_encoded = festival.replace(" ", "+")
     tag_parts.append(f"award sources@@lions award@@{festival_encoded}")
@@ -449,13 +449,13 @@ async def _extract_awards_from_entries_tab(
 ) -> list[Award]:
     """Click the Entries tab and extract awards with category info.
 
-    The Entries tab (#tab-1) shows a table per section (Film, Media, etc.).
-    Each table row has: Name, Section, Category, Awards.
-    Awards column contains "Gold Lion", "Silver Lion", "Shortlisted Cannes Lions", etc.
+    The Entries tab (#tab-1) has one <div> block per main category (Film, Media, etc.).
+    Each block contains:
+      - <h2> with the main category name (e.g. "Film", "PR", "Media")
+      - <table> with rows: [Name, Section, Category, Awards]
+        where Section is a sub-section and Category is a detail category.
 
-    No #panel-1 element exists — content is rendered inline after tab switch.
-
-    Returns list of Awards with level + category populated.
+    Returns list of Awards with level + category (main) + subcategory populated.
     Returns empty list if tab switch fails or no awards found.
     Gracefully falls back — never raises.
     """
@@ -470,58 +470,78 @@ async def _extract_awards_from_entries_tab(
         # Wait a bit for table content to render
         await asyncio.sleep(1.0)
 
-        # The entries are in <table> elements with <tr> rows.
-        # Each data row has <td> cells: [Name, Section, Category, Awards]
-        # Header rows also appear ("Name | Section | Category | Awards").
-        rows = await page.query_selector_all("table tr")
-        logger.debug(f"Found {len(rows)} table rows in Entries tab")
+        # Each main category is: <div><h2>Category Name</h2><table>...</table></div>
+        tables = await page.query_selector_all("table")
+        logger.debug(f"Found {len(tables)} tables in Entries tab")
 
-        for row in rows:
-            cells = await row.query_selector_all("td")
-            if not cells:
-                continue
+        for table in tables:
+            # Get the main category from the <h2> preceding this table.
+            # Structure: <div><h2>Category</h2><table>...</table></div>
+            # Try parent's h2 first, then walk up ancestors.
+            main_category = await table.evaluate("""el => {
+                // Check parent, grandparent, etc. for a child <h2>
+                let node = el.parentElement;
+                for (let i = 0; i < 3 && node; i++) {
+                    const h2 = node.querySelector('h2');
+                    if (h2) return h2.innerText.trim();
+                    node = node.parentElement;
+                }
+                // Fallback: find preceding h2 sibling
+                let prev = el.previousElementSibling;
+                while (prev) {
+                    if (prev.tagName === 'H2') return prev.innerText.trim();
+                    const h2 = prev.querySelector('h2');
+                    if (h2) return h2.innerText.trim();
+                    prev = prev.previousElementSibling;
+                }
+                return '';
+            }""") or ""
 
-            cell_texts = []
-            for cell in cells:
-                text = (await cell.inner_text()).strip()
-                cell_texts.append(text)
+            rows = await table.query_selector_all("tr")
+            for row in rows:
+                cells = await row.query_selector_all("td")
+                if not cells:
+                    continue
 
-            # Skip header rows ("Name | Section | Category | Awards")
-            if cell_texts and cell_texts[0] == "Name":
-                continue
+                cell_texts = []
+                for cell in cells:
+                    text = (await cell.inner_text()).strip()
+                    cell_texts.append(text)
 
-            # Skip rows without enough cells
-            if len(cell_texts) < 4:
-                continue
+                # Skip header rows ("Name | Section | Category | Awards")
+                if cell_texts and cell_texts[0] == "Name":
+                    continue
 
-            section = cell_texts[1]
-            category = cell_texts[2]
-            award_text = cell_texts[3]
+                if len(cell_texts) < 4:
+                    continue
 
-            if not award_text:
-                continue  # No award for this entry
+                section = cell_texts[1]
+                detail_category = cell_texts[2]
+                award_text = cell_texts[3]
 
-            # Parse award level from text like "Gold Lion", "Silver Lion",
-            # "Shortlisted Cannes Lions", "Bronze Lion", "Grand Prix"
-            level = ""
-            award_lower = award_text.lower()
-            for lvl in ["Grand Prix", "Gold", "Silver", "Bronze"]:
-                if lvl.lower() in award_lower:
-                    level = lvl
-                    break
+                if not award_text:
+                    continue
 
-            if "shortlist" in award_lower:
-                continue  # Skip shortlisted entries
+                # Parse award level
+                level = ""
+                award_lower = award_text.lower()
+                for lvl in ["Grand Prix", "Gold", "Silver", "Bronze"]:
+                    if lvl.lower() in award_lower:
+                        level = lvl
+                        break
 
-            if not level:
-                continue
+                if "shortlist" in award_lower:
+                    continue
 
-            awards.append(Award(
-                level=level,
-                category=section,
-                subcategory=category,
-                festival=festival,
-            ))
+                if not level:
+                    continue
+
+                awards.append(Award(
+                    level=level,
+                    category=main_category or section,
+                    subcategory=f"{section}: {detail_category}" if section and detail_category else section or detail_category,
+                    festival=festival,
+                ))
 
         logger.info(f"Extracted {len(awards)} awards from Entries tab")
 
@@ -708,11 +728,11 @@ async def parse_campaign_page(page: Page, entry: CampaignEntry) -> ScrapedCampai
     # --- Content sections ---
     sections = await _extract_content_sections(page)
 
-    # Build description from key sections
+    # Build description from key sections (preserve section headers)
     description_parts = []
     for key in ["Background", "Idea", "Description"]:
         if key in sections:
-            description_parts.append(sections[key])
+            description_parts.append(f"**{key}**\n{sections[key]}")
     description = "\n\n".join(description_parts)
 
     # Build case study from strategy/execution/outcome

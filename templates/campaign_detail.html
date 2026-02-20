@@ -48,19 +48,19 @@
 </div>
 {% endif %}
 
-{% if data.techniques %}
+{% if data.methods %}
 <div class="card">
-  <h3>Techniques</h3>
-  {% for t in data.techniques %}
-  <span class="badge" style="background: var(--accent-dim); margin: 0.15rem;">{{ t }}</span>
+  <h3>Methods</h3>
+  {% for m in data.methods %}
+  <span class="badge" style="background: var(--accent-dim); margin: 0.15rem;">{{ m }}</span>
   {% endfor %}
 </div>
 {% endif %}
 
-{% if data.themes %}
+{% if data.tags %}
 <div class="card">
-  <h3>Themes</h3>
-  {% for t in data.themes %}
+  <h3>Tags</h3>
+  {% for t in data.tags %}
   <span class="badge" style="background: #2e5034; margin: 0.15rem;">{{ t }}</span>
   {% endfor %}
 </div>

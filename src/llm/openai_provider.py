@@ -7,9 +7,11 @@ from src.llm.provider import LLMProvider
 
 
 class OpenAIProvider(LLMProvider):
-    # Pricing per million tokens (as of 2025)
-    _INPUT_COST_PER_M = 2.5
-    _OUTPUT_COST_PER_M = 10.0
+    # Pricing per million tokens: (input, output)
+    _PRICING = {
+        "gpt-4o": (2.5, 10.0),
+        "gpt-4o-mini": (0.15, 0.60),
+    }
 
     def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         self._client = openai.AsyncOpenAI(api_key=api_key)
@@ -41,8 +43,9 @@ class OpenAIProvider(LLMProvider):
         )
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        return (input_tokens / 1_000_000 * self._INPUT_COST_PER_M
-                + output_tokens / 1_000_000 * self._OUTPUT_COST_PER_M)
+        input_cost, output_cost = self._PRICING.get(self._model, (2.5, 10.0))
+        return (input_tokens / 1_000_000 * input_cost
+                + output_tokens / 1_000_000 * output_cost)
 
     @property
     def provider_name(self) -> str:

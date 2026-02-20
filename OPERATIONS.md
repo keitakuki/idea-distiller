@@ -18,9 +18,7 @@
 ```bash
 rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/inbox/*.md
 rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/campaigns/*.md
-rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/techniques/*.md
-rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/technologies/*.md
-rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/themes/*.md
+rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/methods/*.md
 rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/festivals/*.md
 rm -f "/Users/d21605/dentsuDropbox Dropbox/九鬼慧太/11_Obsidian/ideaDistillery"/_Index.md
 ```
@@ -67,11 +65,9 @@ cd /Users/d21605/dev/lab/idea-distillery && python -m src.obsidian.index "/Users
 ```
 
 生成物:
-- `_Index.md` — マスターインデックス（トップテクニック/テーマ一覧）
+- `_Index.md` — マスターインデックス（メソッド一覧）
 - `festivals/Cannes Lions 2025.md` — 賞レベル別キャンペーン一覧
-- `techniques/*.md` — テクニックMOC
-- `technologies/*.md` — テクノロジーMOC
-- `themes/*.md` — テーマMOC
+- `methods/*.md` — メソッドMOC
 
 ---
 
