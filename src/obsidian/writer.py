@@ -265,24 +265,6 @@ def write_campaign_note(
             lines.append(heading)
             lines.append(llm_data[key] + "\n")
 
-    # 戦略構造 (Strategic DNA) — 別パスで抽出された場合のみ表示
-    strategic_fields = [
-        ("strategic_essence", "課題の本質"),
-        ("insight", "インサイト"),
-        ("strategic_shift", "戦略転換"),
-        ("mechanism", "メカニズム"),
-        ("scale_factor", "なぜスケールしたか"),
-    ]
-    strategic_parts = [
-        f"**{label}**: {llm_data[key]}"
-        for key, label in strategic_fields
-        if llm_data.get(key)
-    ]
-    if strategic_parts:
-        lines.append("## 戦略構造")
-        lines.extend(strategic_parts)
-        lines.append("")
-
     # メソッド (wikilink化 — グラフビューのハブになる)
     if llm_data.get("methods"):
         lines.append("## メソッド")

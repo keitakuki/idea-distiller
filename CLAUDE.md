@@ -12,10 +12,13 @@ src/
 │   ├── cannes.py          # カンヌライオンズ スクレイピング
 │   ├── parser.py          # HTML解析（リスト/詳細ページ/Entriesタブ）
 │   ├── models.py          # Award, CampaignEntry, ScrapedCampaign
+│   ├── healthcheck.py     # スクレイプ失敗の分類・修復
 │   ├── auth.py            # Playwright認証
 │   └── setup.py           # 手動ログイン/ページinspect
 ├── llm/                   # LLM処理
 │   ├── processor.py       # process_from_vault() / process_campaigns()
+│   ├── idea_formula.py    # アイデアの作り方 抽出（定式）
+│   ├── translator.py      # 英文ソース → 日本語訳
 │   ├── models.py          # ProcessedCampaign（3レベル日本語要約）
 │   ├── provider.py        # LLMProvider抽象インターフェース
 │   ├── anthropic_provider.py
@@ -68,6 +71,7 @@ vault/
 ### campaigns/ (processed) - 3レベル構造
 1. **概要**: 1-2文。パッと見てわかる
 2. **全体像**: 背景/戦略/アイデア/結果 各1-2文
+2.5. **アイデアの作り方**: 転用可能な定式（1行blockquote）
 3. **詳細**: 背景/戦略/アイデア/結果 各200-400字
 
 ## タグの命名規則（2軸構成）
@@ -153,21 +157,21 @@ python -m src.llm.processor --vault "$VAULT"
 - 既に `campaigns/` に同じslugがあればスキップ
 - `_tags.yaml` に新規タグを自動追記
 
-#### Step 2.5: 戦略DNA抽出（オプション）
+#### Step 2.5: アイデアの作り方 抽出（オプション）
 
-`campaigns/` の処理済みノートから戦略構造（Strategic DNA）を抽出。要約とは別のLLMパスで実行。
+`campaigns/` の処理済みノートから転用可能な定式を抽出。要約とは別のLLMパスで実行。
 
 ```bash
 # テスト（5件）
-python -m src.llm.strategic_dna --vault "$VAULT" --limit 5
+python -m src.llm.idea_formula --vault "$VAULT" --limit 5
 
 # 全件
-python -m src.llm.strategic_dna --vault "$VAULT"
+python -m src.llm.idea_formula --vault "$VAULT"
 ```
 
 - 入力: 各キャンペーンの概要+全体像セクションのみ
-- 出力: `## 戦略構造` セクションを `## メソッド` の前に挿入
-- 既に戦略構造がある場合はスキップ
+- 出力: `## アイデアの作り方` セクションを全体像と詳細の間に挿入
+- 既にセクションがある場合はスキップ
 - コスト: 約 $0.002/件（入力が短いため）
 
 #### Step 2.7: 和訳（オプション）
@@ -252,14 +256,19 @@ source: manual
 # スクレイピング
 python -m src.scraper.cannes <year> [job_id] [festival] [max_pages]
 python -m src.scraper.cannes --url '<library_url>' [job_id]
+python -m src.scraper.cannes --retry [job_id]                    # status:retry を再スクレイプ
 
 # LLM処理
 python -m src.llm.processor --vault <vault_path>
 python -m src.llm.processor <raw_dir>              # レガシーJSON経由
 
-# 戦略DNA抽出
-python -m src.llm.strategic_dna --vault <vault_path>
-python -m src.llm.strategic_dna --vault <vault_path> --limit 5  # テスト用
+# アイデアの作り方 抽出
+python -m src.llm.idea_formula --vault <vault_path>
+python -m src.llm.idea_formula --vault <vault_path> --limit 5   # テスト用
+
+# ヘルスチェック（スクレイプ失敗の分類・修復）
+python -m src.scraper.healthcheck <vault_path>
+python -m src.scraper.healthcheck <vault_path> --fix             # status→retry に変更
 
 # 和訳（英文ソース → 日本語訳）
 python -m src.llm.translator --vault <vault_path>
@@ -276,6 +285,78 @@ python -m src.scraper.setup inspect <url> [--tab entries|credits]
 # Web UI
 python -m src.main
 ```
+
+## 用語
+
+| 用語 | 意味 | コード |
+|---|---|---|
+| アイデアの作り方 | 転用可能な定式（1行blockquote） | `src/llm/idea_formula.py` |
+| 概要 | 1-2文の要約 | `src/llm/processor.py` |
+| 全体像 | 背景/戦略/アイデア/結果 各1-2文 | 同上 |
+| 詳細 | 背景/戦略/アイデア/結果 各200-400字 | 同上 |
+| 和訳 | 英文ソースの日本語訳 | `src/llm/translator.py` |
+
+## 年次パイプライン手順
+
+毎年のフェスティバル処理はこの順番で実行する。
+
+```bash
+# Step 1: スクレイプ
+python -m src.scraper.cannes <year>
+
+# Step 2: LLM処理
+python -m src.llm.processor --vault "$VAULT"
+
+# Step 2.5: アイデアの作り方
+python -m src.llm.idea_formula --vault "$VAULT"
+
+# Step 2.7: 和訳
+python -m src.llm.translator --vault "$VAULT"
+
+# Step 3: インデックス
+python -m src.obsidian.index "$VAULT"
+
+# Step 4: ヘルスチェック
+python -m src.scraper.healthcheck "$VAULT" --fix
+
+# Step 5: リトライ（parser_failure があれば）
+python -m src.scraper.cannes --retry cannes<year>
+
+# Step 6: リトライ後の再処理
+python -m src.llm.translator --vault "$VAULT"
+python -m src.scraper.healthcheck "$VAULT" --fix  # 残留問題を paywall に分類
+
+# Step 7: インデックス再生成
+python -m src.obsidian.index "$VAULT"
+```
+
+### 処理状態の確認
+
+| 確認項目 | コマンド |
+|---|---|
+| inbox の status 分布 | `grep -r "^status:" "$VAULT"/inbox/ \| sort \| uniq -c` |
+| campaigns/ の件数 | `ls "$VAULT"/campaigns/*.md \| wc -l` |
+| 和訳なしの campaigns | `grep -rL "## 和訳" "$VAULT"/campaigns/` |
+| アイデアの作り方なし | `grep -rL "## アイデアの作り方" "$VAULT"/campaigns/` |
+| ヘルスチェック | `python -m src.scraper.healthcheck "$VAULT"` |
+
+### 失敗リカバリ
+
+1. `python -m src.scraper.healthcheck "$VAULT"` で分類確認
+2. `--fix` で parser_failure → `status: retry` に変更
+3. `python -m src.scraper.cannes --retry cannes<year>` で再スクレイプ
+4. 再度ヘルスチェック。まだ空なら paywall として記録される
+
+## メソッド統合（手動ステップ）
+
+年次処理後にメソッド一覧を確認し、類似メソッドを統合する。
+
+1. `methods/` のMOCファイル一覧を確認
+2. 類似メソッドを特定（例: "Brand Utility" と "Utility-Driven Marketing"）
+3. `_tags.yaml` の methods dict で統合先を残し、統合元を削除
+4. `campaigns/` の frontmatter で該当メソッド名を置換
+5. `python -m src.obsidian.index "$VAULT"` でインデックス再生成
+6. `methods/` の不要MOCファイルを削除
 
 ## 設定
 

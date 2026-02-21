@@ -4,8 +4,8 @@ Reads campaigns/ notes, sends summary+overview to LLM,
 and inserts a ## アイデアの作り方 section into the note.
 
 Usage:
-    python -m src.llm.strategic_dna --vault <vault_path>
-    python -m src.llm.strategic_dna --vault <vault_path> --limit 5   # test batch
+    python -m src.llm.idea_formula --vault <vault_path>
+    python -m src.llm.idea_formula --vault <vault_path> --limit 5   # test batch
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ OLD_SECTION_HEADING = "## 戦略構造"
 
 
 @dataclass
-class DNAProgress:
+class FormulaProgress:
     total: int = 0
     completed: int = 0
     skipped: int = 0
@@ -107,16 +107,16 @@ def _insert_idea_section(content: str, section: str) -> str:
     return content.rstrip() + f"\n\n{section}\n"
 
 
-async def extract_strategic_dna(
+async def extract_idea_formula(
     vault_path: Path,
     limit: int | None = None,
     batch_size: int = 5,
     batch_delay: float = 1.5,
 ):
-    """Extract strategic DNA from existing campaign notes."""
+    """Extract idea-making formula from existing campaign notes."""
     provider = create_provider()
-    template = load_prompt_template("strategic_dna")
-    progress = DNAProgress()
+    template = load_prompt_template("idea_formula")
+    progress = FormulaProgress()
 
     campaigns_dir = vault_path / "campaigns"
     if not campaigns_dir.exists():
@@ -233,11 +233,11 @@ if __name__ == "__main__":
             i += 2
         else:
             print(f"Unknown argument: {args[i]}")
-            print("Usage: python -m src.llm.strategic_dna --vault <path> [--limit N]")
+            print("Usage: python -m src.llm.idea_formula --vault <path> [--limit N]")
             sys.exit(1)
 
     async def _main():
-        progress = await extract_strategic_dna(vault, limit=limit)
+        progress = await extract_idea_formula(vault, limit=limit)
         print(f"\nDone: {progress.completed} processed, {progress.skipped} skipped, {progress.failed} failed")
         if progress.errors:
             print("Errors:")

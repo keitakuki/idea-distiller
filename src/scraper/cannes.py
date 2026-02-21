@@ -144,7 +144,11 @@ async def scrape_campaigns(
             )
 
         logger.info(f"Phase 1: Collecting campaigns from library: {first_page_url}")
-        await page.goto(first_page_url, wait_until="domcontentloaded")
+        await page.goto(
+            first_page_url,
+            wait_until="domcontentloaded",
+            timeout=settings.scraper_timeout,
+        )
         await _human_delay(3.0)
 
         # Scroll first to load all content including pagination
@@ -183,9 +187,13 @@ async def scrape_campaigns(
 
             progress.current_url = next_url
             try:
-                await page.goto(next_url, wait_until="domcontentloaded")
+                await page.goto(
+                    next_url,
+                    wait_until="domcontentloaded",
+                    timeout=settings.scraper_timeout,
+                )
                 await _human_delay(settings.scraper_delay)
-                await _scroll_to_load_all(page, max_rounds=10)
+                await _scroll_to_load_all(page, max_rounds=10, timeout_s=20)
 
                 entries = await extract_library_campaigns(page)
                 all_entries.extend(entries)
@@ -215,7 +223,11 @@ async def scrape_campaigns(
         for entry in all_entries:
             progress.current_url = entry.url
             try:
-                await page.goto(entry.url, wait_until="networkidle")
+                await page.goto(
+                    entry.url,
+                    wait_until="networkidle",
+                    timeout=settings.scraper_timeout,
+                )
                 await _human_delay(settings.scraper_delay)
 
                 campaign = await parse_campaign_page(page, entry)

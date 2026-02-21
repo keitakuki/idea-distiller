@@ -1,4 +1,4 @@
-name: strategic_dna
+name: idea_formula
 description: キャンペーンのアイデアの作り方（転用可能な方程式）を抽出する
 system_prompt: |
   あなたは広告クリエイティブの構造分析者。

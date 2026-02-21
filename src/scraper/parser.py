@@ -195,12 +195,24 @@ def build_library_url(
 # Campaign Library listing page
 # ---------------------------------------------------------------------------
 
-async def _scroll_to_load_all(page: Page, max_rounds: int = 20) -> None:
-    """Scroll down to load all lazy-loaded content."""
+async def _scroll_to_load_all(page: Page, max_rounds: int = 20, timeout_s: float = 30) -> None:
+    """Scroll down to load all lazy-loaded content.
+
+    Has a hard timeout to prevent infinite hangs on misbehaving pages.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout_s
     prev_height = 0
     stable_count = 0
     for _ in range(max_rounds):
-        height = await page.evaluate("document.body.scrollHeight")
+        if time.monotonic() > deadline:
+            logger.debug(f"_scroll_to_load_all hit {timeout_s}s timeout")
+            break
+        try:
+            height = await page.evaluate("document.body.scrollHeight")
+        except Exception:
+            break
         if height == prev_height:
             stable_count += 1
             if stable_count >= 2:
@@ -208,12 +220,26 @@ async def _scroll_to_load_all(page: Page, max_rounds: int = 20) -> None:
         else:
             stable_count = 0
         prev_height = height
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        try:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            break
         await asyncio.sleep(1.2)
 
 
-async def get_total_pages(page: Page) -> int:
-    """Get total number of pages from pagination controls."""
+async def get_total_pages(page: Page, timeout_ms: int = 30000) -> int:
+    """Get total number of pages from pagination controls.
+
+    Waits for the pagination nav to appear (lazy-loaded) before reading.
+    """
+    try:
+        await page.wait_for_selector(
+            'nav[data-testid="pagination"]', timeout=timeout_ms
+        )
+    except Exception:
+        # Pagination may not exist if only 1 page of results
+        return 1
+
     page_buttons = await page.query_selector_all(
         'nav[data-testid="pagination"] button[aria-label^="Go to page"]'
     )
