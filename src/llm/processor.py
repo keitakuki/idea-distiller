@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,11 +128,15 @@ async def process_from_vault(
     template_name: str = "summarize",
     provider: LLMProvider | None = None,
     db=None,
+    job_id: str | None = None,
 ) -> AsyncIterator[tuple[ProcessedCampaign | None, ProcessProgress]]:
     """Process inbox notes from Obsidian vault through LLM.
 
     Reads vault/inbox/ (status: raw) → calls LLM → writes vault/campaigns/.
     Also reads _tags.yaml for tag consistency and updates it with new tags.
+
+    Args:
+        job_id: If provided, only process inbox/{job_id}/ and write to campaigns/{job_id}/.
     """
     provider = provider or create_provider()
     template = load_prompt_template(template_name)
@@ -143,10 +148,12 @@ async def process_from_vault(
     tags_context = _build_tags_context(tags_data)
 
     # Read inbox notes
-    inbox_notes = read_inbox_notes(vault_path, status="raw")
+    inbox_notes = read_inbox_notes(vault_path, status="raw", job_id=job_id)
 
     # Skip already processed (check slug in campaign frontmatter)
     campaigns_dir = vault_path / "campaigns"
+    if job_id:
+        campaigns_dir = campaigns_dir / job_id
     already_done = set()
     if campaigns_dir.exists():
         for md_file in campaigns_dir.glob("*.md"):
@@ -166,6 +173,23 @@ async def process_from_vault(
         content = note["content"]
         slug = meta.get("slug", note["path"].stem)
         progress.current_file = slug
+
+        # Content gate: skip notes with no real content (prevents LLM fabrication)
+        if "## Description" not in content and "## Case Study" not in content:
+            # Strip non-content elements: H1 title, image embeds, section headers
+            stripped = re.sub(r"^#\s+.*$", "", content, count=1, flags=re.MULTILINE)
+            stripped = re.sub(r"^##\s+.*$", "", stripped, flags=re.MULTILINE)
+            stripped = re.sub(r"!\[\[.*?\]\]", "", stripped)
+            stripped = re.sub(r"!\[.*?\]\(.*?\)", "", stripped)
+            stripped = re.sub(r"\[.*?\]\(.*?\)", "", stripped)
+            stripped = stripped.strip()
+            if len(stripped) < 100:
+                logger.warning(f"Skipping {slug}: no real content (likely failed scrape)")
+                progress.failed += 1
+                progress.errors.append(f"Empty content: {slug}")
+                _revert_to_retry(note["path"])
+                yield None, progress
+                continue
 
         try:
             # Build campaign data dict for prompt rendering
@@ -243,11 +267,10 @@ async def process_from_vault(
             raw_data["slug"] = slug
             # Extract image filenames from inbox note content (![[filename]])
             if "image_paths" not in raw_data:
-                import re
                 image_embeds = re.findall(r"!\[\[([^\]]+\.(?:webp|png|jpg|jpeg|gif))\]\]", content)
                 if image_embeds:
                     raw_data["image_paths"] = image_embeds
-            write_campaign_note(raw_data, processed.model_dump(), vault_path)
+            write_campaign_note(raw_data, processed.model_dump(), vault_path, job_id=job_id)
 
             # Update _tags.yaml with any new tags
             update_tags_yaml(vault_path, {
@@ -286,6 +309,21 @@ async def process_from_vault(
             progress.errors.append(error_msg)
             logger.error(error_msg)
             yield None, progress
+
+
+def _revert_to_retry(path: Path) -> None:
+    """Revert an inbox note status from raw to retry.
+
+    Used when content is too thin for LLM processing (likely failed scrape).
+    """
+    try:
+        post = frontmatter.load(str(path))
+        if post.metadata.get("status") == "raw":
+            post.metadata["status"] = "retry"
+            path.write_text(frontmatter.dumps(post), encoding="utf-8")
+            logger.info(f"Reverted to retry: {path.name}")
+    except Exception as e:
+        logger.warning(f"Failed to revert {path.name}: {e}")
 
 
 def _update_inbox_status(note_path: Path, new_status: str) -> None:
@@ -421,10 +459,20 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if sys.argv[1] == "--vault":
-        vault = Path(sys.argv[2]) if len(sys.argv) > 2 else settings.vault_path
+        vault = settings.vault_path
+        job_id = None
+        args = sys.argv[2:]
+        i = 0
+        while i < len(args):
+            if args[i] == "--job" and i + 1 < len(args):
+                job_id = args[i + 1]
+                i += 2
+            else:
+                vault = Path(args[i])
+                i += 1
 
         async def _main_vault():
-            async for processed, progress in process_from_vault(vault):
+            async for processed, progress in process_from_vault(vault, job_id=job_id):
                 if processed:
                     print(
                         f"  [{progress.completed}/{progress.total}] "

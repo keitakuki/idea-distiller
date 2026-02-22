@@ -2,6 +2,15 @@
 
 受賞広告キャンペーンをスクレイピング→LLM分析→Obsidianノートとして構造化するツール。
 
+## 開発原則
+
+**コンテキスト消失前提の設計**: このツールは実装者・運用者・保守者のコンテキストが完全に失われることを前提とする。すべての変更において以下を確認すること:
+
+1. **CLAUDE.md（本ファイル）が最新か** — コマンドの引数変更、ディレクトリ構造の変更、新規スクリプト追加は即座にここに反映する
+2. **ワークフローが自己完結しているか** — 年次パイプライン手順だけ読めば、前提知識なしで全工程を実行できること
+3. **復元可能性** — アーカイブ、バックアップには復元手順を同梱する（例: `RESTORE.md`）
+4. **暗黙知を作らない** — 「なぜそうなっているか」の判断理由もコード内コメントまたは本ファイルに残す
+
 ## ディレクトリ構成
 
 ```
@@ -37,29 +46,63 @@ src/
 │   └── manager.py         # パイプラインオーケストレーション
 └── web/
     └── routes.py          # FastAPI Web UIルート
+
+scripts/
+├── vault_status.py            # Vault状態のジョブ別表示
+├── migrate_to_subfolders.py   # フラット→サブフォルダ移行（一回限り）
+├── archive_job.py             # ジョブ単位のtar.gzアーカイブ作成
+├── migrate_methods.py         # メソッド統合スクリプト
+└── test_prompt.py             # LLMプロンプトのテスト
+
+data/
+└── raw/
+    └── {job_id}/              # スクレイプ時のJSONバックアップ
+        ├── {slug}.json        # キャンペーンごとのJSON
+        └── images/            # ダウンロード画像（大容量）
+
+archives/
+└── {job_id}.tar.gz            # ジョブ単位のアーカイブ（実行時に生成）
+    # 内部構造:
+    #   RESTORE.md               — 復元手順（展開先パス付き）
+    #   vault/inbox/{job_id}/    — → $VAULT/inbox/{job_id}/ に復元
+    #   vault/campaigns/{job_id}/ — → $VAULT/campaigns/{job_id}/ に復元
+    #   project/data/raw/{job_id}/ — → $PROJECT/data/raw/{job_id}/ に復元
+    # ※ images/ は容量のため除外（保管方針は要検討）
 ```
 
 ## Obsidian Vault構成
 
 ```
 vault/
-├── inbox/          # 未処理ノート（status: raw）。唯一の入力口
-├── campaigns/      # 処理済みノート（status: processed）。3レベル日本語要約
-├── methods/        # メソッドMOC（Wikilink）
-├── festivals/      # フェスティバル別インデックス
-├── attachments/    # 画像ファイル
-├── _Index.md       # マスターインデックス
-└── _tags.yaml      # タグマスターリスト（methods dict + tags list の2軸）
+├── inbox/
+│   ├── cannes2025/        ← job_id別サブフォルダ
+│   │   ├── slug-a.md
+│   │   └── slug-b.md
+│   └── cannes2024/
+│       └── slug-c.md
+├── campaigns/
+│   ├── cannes2025/
+│   │   └── Title A.md
+│   └── cannes2024/
+│       └── Title C.md
+├── methods/               ← フラット維持（全年横断）
+├── festivals/             ← フラット維持
+├── attachments/           ← フラット維持（共有）
+├── _Index.md              # マスターインデックス
+└── _tags.yaml             # タグマスターリスト（methods dict + tags list の2軸）
 ```
+
+Obsidian の wikilink は `[[ファイル名]]` でフォルダ構造に依存しないため、リンクはサブフォルダ内でもそのまま機能する。
 
 ## データフロー
 
 ```
-[ソース] → vault/inbox/{slug}.md (status: raw)
-         → LLM処理 → vault/campaigns/{slug}.md (status: processed)
+[ソース] → vault/inbox/{job_id}/{slug}.md (status: raw)
+         → LLM処理 → vault/campaigns/{job_id}/{Title}.md (status: processed)
          → インデックス生成 → methods/, festivals/, _Index.md
 
 ※ data/raw/ にもJSON保存（バックアップ）
+※ 全コマンドは --job <job_id> でジョブ単位にフィルタ可能
 ```
 
 ## ノート形式
@@ -100,14 +143,16 @@ vault/
 
 ### フルパイプライン（クリーンビルド）
 
-既存データを削除して最初から全件構築する手順。
+特定ジョブを最初から再構築する手順。
 
-#### Step 0: Vault クリーンアップ
+#### Step 0: ジョブ単位のクリーンアップ
 
 ```bash
-# 生成物を削除（attachments/ と _tags.yaml は残す）
-rm -f "$VAULT"/inbox/*.md
-rm -f "$VAULT"/campaigns/*.md
+# 特定ジョブのみ削除（他年のデータは安全）
+rm -rf "$VAULT"/inbox/cannes2025
+rm -rf "$VAULT"/campaigns/cannes2025
+
+# インデックス（全年横断なので再生成で対応）
 rm -f "$VAULT"/methods/*.md
 rm -f "$VAULT"/festivals/*.md
 rm -f "$VAULT"/_Index.md
@@ -116,11 +161,11 @@ rm -f "$VAULT"/_Index.md
 rm -rf data/raw/cannes2025
 ```
 
-※ `attachments/` の画像と `_tags.yaml` は残してOK。画像は同名ファイルをスキップするので再ダウンロード不要。`_tags.yaml` はLLMのタグ一貫性に使われる。完全リセットしたい場合は `_tags.yaml` も削除可。
+※ `attachments/` の画像と `_tags.yaml` は残してOK。
 
 #### Step 1: スクレイピング
 
-Love the Workからデータ取得 → `inbox/` にraw MD + `data/raw/` にJSON + `attachments/` に画像。
+Love the Workからデータ取得 → `inbox/{job_id}/` にraw MD + `data/raw/` にJSON + `attachments/` に画像。
 
 ```bash
 cd /Users/d21605/dev/lab/idea-distillery
@@ -133,7 +178,7 @@ python -m src.scraper.setup login   # 必要な場合
 python -m src.scraper.cannes 2025
 #                             ^^^^
 #                             年（必須）。job_idは自動で "cannes2025" になる
-#                             JSONバックアップは data/raw/cannes2025/ に保存
+#                             inbox/cannes2025/ にMD、data/raw/cannes2025/ にJSON
 
 # ページ制限付き（テスト用。3ページ＝約72件）
 python -m src.scraper.cannes 2025 cannes2025 'cannes lions' 3
@@ -141,61 +186,44 @@ python -m src.scraper.cannes 2025 cannes2025 'cannes lions' 3
 
 - 1ページ≒24件、2-3秒/件
 - 全ページ数は実行時にログ出力される
-- 中断しても `data/raw/cannes2025/` にJSON、`inbox/` にMDが残るので再開可能（既存slugはスキップ）
+- 中断しても再開可能（既存slugはスキップ）
 
 #### Step 2: LLM 処理
 
-`inbox/` の status:raw ノートをLLM分析 → `campaigns/` に構造化ノートを生成。
+`inbox/{job_id}/` の status:raw ノートをLLM分析 → `campaigns/{job_id}/` に構造化ノートを生成。
 
 ```bash
-python -m src.llm.processor --vault "$VAULT"
+python -m src.llm.processor --vault "$VAULT" --job cannes2025
 ```
 
+- `--job` を指定すると対象ジョブのみ処理（推奨）
+- `--job` なしで全ジョブの未処理ノートを一括処理も可
 - モデル: Claude Haiku 4.5（`config.yaml` で設定）
 - コスト: 約 $0.016/件
-- 処理済みノートはinboxのstatusが `processed` に更新される
-- 既に `campaigns/` に同じslugがあればスキップ
-- `_tags.yaml` に新規タグを自動追記
 
 #### Step 2.5: アイデアの作り方 抽出（オプション）
 
-`campaigns/` の処理済みノートから転用可能な定式を抽出。要約とは別のLLMパスで実行。
-
 ```bash
 # テスト（5件）
-python -m src.llm.idea_formula --vault "$VAULT" --limit 5
+python -m src.llm.idea_formula --vault "$VAULT" --job cannes2025 --limit 5
 
 # 全件
-python -m src.llm.idea_formula --vault "$VAULT"
+python -m src.llm.idea_formula --vault "$VAULT" --job cannes2025
 ```
-
-- 入力: 各キャンペーンの概要+全体像セクションのみ
-- 出力: `## アイデアの作り方` セクションを全体像と詳細の間に挿入
-- 既にセクションがある場合はスキップ
-- コスト: 約 $0.002/件（入力が短いため）
 
 #### Step 2.7: 和訳（オプション）
 
-`inbox/` の英文ソース（Description + Case Study）を GPT-4o-mini で日本語訳し、`campaigns/` ノートに `## 和訳` セクションとして挿入。
-
 ```bash
 # テスト（5件）
-python -m src.llm.translator --vault "$VAULT" --limit 5
+python -m src.llm.translator --vault "$VAULT" --job cannes2025 --limit 5
 
 # 全件
-python -m src.llm.translator --vault "$VAULT"
+python -m src.llm.translator --vault "$VAULT" --job cannes2025
 ```
-
-- モデル: GPT-4o-mini（設定に依存せず固定）
-- 入力: inbox ノートの Description + Case Study セクション
-- 出力: `## 和訳` セクションを `## メソッド` の前に挿入
-- 既に和訳がある場合はスキップ
-- inbox にノートがないキャンペーンもスキップ
-- コスト: 約 $0.0015/件
 
 #### Step 3: インデックス生成
 
-`campaigns/` のfrontmatterから各種MOC/インデックスを再生成。
+`campaigns/` 全サブフォルダのfrontmatterから各種MOC/インデックスを再生成。
 
 ```bash
 python -m src.obsidian.index "$VAULT"
@@ -208,16 +236,14 @@ python -m src.obsidian.index "$VAULT"
 
 ### 部分更新（追加スクレイプ）
 
-新しいキャンペーンを追加する場合。既存データは削除不要。
-
 ```bash
 # 1. スクレイプ（既存slugはスキップされる）
-python -m src.scraper.cannes 2025 cannes2025
+python -m src.scraper.cannes 2025
 
-# 2. LLM処理（status:raw のみ処理）
-python -m src.llm.processor --vault "$VAULT"
+# 2. LLM処理（対象ジョブのみ）
+python -m src.llm.processor --vault "$VAULT" --job cannes2025
 
-# 3. インデックス再生成（全件から再ビルド）
+# 3. インデックス再生成（全年横断）
 python -m src.obsidian.index "$VAULT"
 ```
 
@@ -225,11 +251,13 @@ python -m src.obsidian.index "$VAULT"
 
 スクレイパーを使わず、手動でキャンペーンを追加する場合。
 
-1. `$VAULT/inbox/` に以下のMarkdownを作成:
+1. `$VAULT/inbox/{job_id}/` に以下のMarkdownを作成:
 
 ```yaml
 ---
 title: "キャンペーン名"
+festival: "Cannes Lions"
+year: 2025
 status: raw
 source: manual
 ---
@@ -249,33 +277,47 @@ source: manual
 | LLM処理が0件 | inboxに `status: raw` のファイルがあるか確認 |
 | 画像が表示されない | `attachments/` にファイルがあるか確認。Obsidianの添付ファイルフォルダ設定を確認 |
 | タグが重複 | `_tags.yaml` を手動編集して統合後、campaigns/ のfrontmatterも修正 |
+| LLMがタイトルだけから捏造 | `healthcheck --fix` でゴースト検出→inbox を retry に戻し偽 campaign を削除→リトライ |
+| スクレイプ成功だが中身が空 | 品質ゲートにより自動で `status: retry` に設定される（raw にならない） |
 
 ## コマンドリファレンス
 
 ```bash
-# スクレイピング
+# スクレイピング（→ inbox/{job_id}/ に書き込み）
 python -m src.scraper.cannes <year> [job_id] [festival] [max_pages]
 python -m src.scraper.cannes --url '<library_url>' [job_id]
 python -m src.scraper.cannes --retry [job_id]                    # status:retry を再スクレイプ
 
-# LLM処理
-python -m src.llm.processor --vault <vault_path>
+# LLM処理（--job でジョブ単位にフィルタ）
+python -m src.llm.processor --vault <vault_path> [--job <job_id>]
 python -m src.llm.processor <raw_dir>              # レガシーJSON経由
 
 # アイデアの作り方 抽出
-python -m src.llm.idea_formula --vault <vault_path>
-python -m src.llm.idea_formula --vault <vault_path> --limit 5   # テスト用
+python -m src.llm.idea_formula --vault <vault_path> [--job <job_id>] [--limit N]
 
-# ヘルスチェック（スクレイプ失敗の分類・修復）
-python -m src.scraper.healthcheck <vault_path>
-python -m src.scraper.healthcheck <vault_path> --fix             # status→retry に変更
+# ヘルスチェック（スクレイプ失敗の分類・修復・ゴースト検出）
+# 分類: ok / parser_failure / ghost / paywall / already_processed / already_retry
+# ghost = status:processed だがコンテンツが空（LLM捏造の疑い）
+python -m src.scraper.healthcheck <vault_path> [--job <job_id>] [--fix]
 
 # 和訳（英文ソース → 日本語訳）
-python -m src.llm.translator --vault <vault_path>
-python -m src.llm.translator --vault <vault_path> --limit 5     # テスト用
+python -m src.llm.translator --vault <vault_path> [--job <job_id>] [--limit N]
 
-# インデックス
+# インデックス（全年横断、--job なし）
 python -m src.obsidian.index <vault_path>
+
+# Vault 状態確認（ジョブ別表示）
+python scripts/vault_status.py
+
+# マイグレーション（フラット → サブフォルダ）
+python scripts/migrate_to_subfolders.py              # dry-run
+python scripts/migrate_to_subfolders.py --execute    # 実行
+
+# アーカイブ（読み取り専用バックアップ、images除外）
+python scripts/archive_job.py <job_id>
+# → archives/{job_id}.tar.gz
+#   vault/inbox/ + vault/campaigns/ + project/data/raw/ JSON
+#   RESTORE.md 同梱（復元コマンド付き）
 
 # セッション管理
 python -m src.scraper.setup login
@@ -298,54 +340,61 @@ python -m src.main
 
 ## 年次パイプライン手順
 
-毎年のフェスティバル処理はこの順番で実行する。
+毎年のフェスティバル処理はこの順番で実行する。`JOB=cannes<year>` として使用。
 
 ```bash
+JOB=cannes2025
+
 # Step 1: スクレイプ
 python -m src.scraper.cannes <year>
 
 # Step 2: LLM処理
-python -m src.llm.processor --vault "$VAULT"
+python -m src.llm.processor --vault "$VAULT" --job $JOB
 
 # Step 2.5: アイデアの作り方
-python -m src.llm.idea_formula --vault "$VAULT"
+python -m src.llm.idea_formula --vault "$VAULT" --job $JOB
 
 # Step 2.7: 和訳
-python -m src.llm.translator --vault "$VAULT"
+python -m src.llm.translator --vault "$VAULT" --job $JOB
 
-# Step 3: インデックス
+# Step 3: インデックス（全年横断）
 python -m src.obsidian.index "$VAULT"
 
 # Step 4: ヘルスチェック
-python -m src.scraper.healthcheck "$VAULT" --fix
+python -m src.scraper.healthcheck "$VAULT" --job $JOB --fix
 
 # Step 5: リトライ（parser_failure があれば）
-python -m src.scraper.cannes --retry cannes<year>
+python -m src.scraper.cannes --retry $JOB
 
 # Step 6: リトライ後の再処理
-python -m src.llm.translator --vault "$VAULT"
-python -m src.scraper.healthcheck "$VAULT" --fix  # 残留問題を paywall に分類
+python -m src.llm.translator --vault "$VAULT" --job $JOB
+python -m src.scraper.healthcheck "$VAULT" --job $JOB --fix
 
 # Step 7: インデックス再生成
 python -m src.obsidian.index "$VAULT"
+
+# Step 8: アーカイブ（オプション、完了後のバックアップ）
+python scripts/archive_job.py $JOB
 ```
 
 ### 処理状態の確認
 
-| 確認項目 | コマンド |
-|---|---|
-| inbox の status 分布 | `grep -r "^status:" "$VAULT"/inbox/ \| sort \| uniq -c` |
-| campaigns/ の件数 | `ls "$VAULT"/campaigns/*.md \| wc -l` |
-| 和訳なしの campaigns | `grep -rL "## 和訳" "$VAULT"/campaigns/` |
-| アイデアの作り方なし | `grep -rL "## アイデアの作り方" "$VAULT"/campaigns/` |
-| ヘルスチェック | `python -m src.scraper.healthcheck "$VAULT"` |
+```bash
+# ジョブ別の全体ステータス（推奨）
+python scripts/vault_status.py
+
+# 個別確認
+python -m src.scraper.healthcheck "$VAULT" --job cannes2025
+```
 
 ### 失敗リカバリ
 
-1. `python -m src.scraper.healthcheck "$VAULT"` で分類確認
-2. `--fix` で parser_failure → `status: retry` に変更
-3. `python -m src.scraper.cannes --retry cannes<year>` で再スクレイプ
+1. `python -m src.scraper.healthcheck "$VAULT" --job $JOB` で分類確認
+2. `--fix` で parser_failure / ghost → `status: retry` に変更（ghost は偽 campaign も削除）
+3. `python -m src.scraper.cannes --retry $JOB` で再スクレイプ
 4. 再度ヘルスチェック。まだ空なら paywall として記録される
+
+**ゴーストキャンペーン**: スクレイプ時に空コンテンツが `status: raw` で保存され、LLMがタイトルのみから内容を捏造したケース。`healthcheck --fix` で inbox を retry に戻し、campaigns/ の偽ノートを削除する。現在は品質ゲートにより新規発生を防止。
 
 ## メソッド統合（手動ステップ）
 

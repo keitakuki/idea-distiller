@@ -107,8 +107,13 @@ async def translate_campaigns(
     limit: int | None = None,
     batch_size: int = 5,
     batch_delay: float = 1.5,
+    job_id: str | None = None,
 ) -> TranslateProgress:
-    """Translate source text and insert into campaign notes."""
+    """Translate source text and insert into campaign notes.
+
+    Args:
+        job_id: If provided, only process campaigns/{job_id}/ and look up inbox/{job_id}/.
+    """
     provider = OpenAIProvider(
         api_key=settings.openai_api_key,
         model="gpt-4o-mini",
@@ -118,6 +123,9 @@ async def translate_campaigns(
 
     campaigns_dir = vault_path / "campaigns"
     inbox_dir = vault_path / "inbox"
+    if job_id:
+        campaigns_dir = campaigns_dir / job_id
+        inbox_dir = inbox_dir / job_id
     if not campaigns_dir.exists():
         logger.error(f"Campaigns directory not found: {campaigns_dir}")
         return progress
@@ -125,7 +133,8 @@ async def translate_campaigns(
     # Build inbox slug → path lookup
     inbox_lookup: dict[str, Path] = {}
     if inbox_dir.exists():
-        for md_file in inbox_dir.glob("*.md"):
+        inbox_glob = inbox_dir.glob("*.md")
+        for md_file in inbox_glob:
             try:
                 post = frontmatter.load(str(md_file))
                 slug = post.metadata.get("slug", md_file.stem)
@@ -231,6 +240,7 @@ if __name__ == "__main__":
 
     vault = settings.vault_path
     limit = None
+    job_id = None
 
     args = sys.argv[1:]
     i = 0
@@ -241,13 +251,16 @@ if __name__ == "__main__":
         elif args[i] == "--limit" and i + 1 < len(args):
             limit = int(args[i + 1])
             i += 2
+        elif args[i] == "--job" and i + 1 < len(args):
+            job_id = args[i + 1]
+            i += 2
         else:
             print(f"Unknown argument: {args[i]}")
-            print("Usage: python -m src.llm.translator --vault <path> [--limit N]")
+            print("Usage: python -m src.llm.translator --vault <path> [--job JOB] [--limit N]")
             sys.exit(1)
 
     async def _main():
-        progress = await translate_campaigns(vault, limit=limit)
+        progress = await translate_campaigns(vault, limit=limit, job_id=job_id)
         print(f"\nDone: {progress.completed} translated, {progress.skipped} skipped, {progress.failed} failed")
         if progress.errors:
             print("Errors:")

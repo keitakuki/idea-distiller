@@ -232,6 +232,25 @@ async def scrape_campaigns(
 
                 campaign = await parse_campaign_page(page, entry)
 
+                # Content gate: mark as retry if no real content
+                # (mirrors the check in retry_failed() to prevent asymmetric behavior)
+                if not campaign.description and not campaign.case_study_text:
+                    logger.warning(f"No content scraped for {campaign.slug} — marking as retry")
+                    data = campaign.model_dump()
+                    data["_scrape_status"] = "no_content"
+                    if not settings.export_include_raw_html:
+                        data.pop("raw_html", None)
+                    save_json(output_dir / f"{campaign.slug}.json", data)
+                    if vault_path:
+                        write_inbox_note(data, vault_path, job_id=job_id, status_override="retry")
+                        copy_images_to_vault(
+                            data.get("image_paths", []), output_dir, vault_path
+                        )
+                    progress.failed += 1
+                    progress.errors.append(f"No content: {campaign.slug}")
+                    yield None, progress
+                    continue
+
                 # Download images
                 if settings.export_download_images:
                     image_paths = await _download_campaign_images(campaign, images_dir)
@@ -246,7 +265,7 @@ async def scrape_campaigns(
                 # Write inbox note to Obsidian vault
                 if vault_path:
                     try:
-                        write_inbox_note(data, vault_path)
+                        write_inbox_note(data, vault_path, job_id=job_id)
                         copy_images_to_vault(
                             data.get("image_paths", []), output_dir, vault_path
                         )
@@ -290,10 +309,15 @@ async def retry_failed(
     images_dir = output_dir / "images"
     progress = ScrapeProgress()
 
-    # Collect retry notes
+    # Collect retry notes (check job_id subfolder first, then top-level for back-compat)
     inbox_dir = vault_path / "inbox"
     retry_notes = []
-    for md_file in sorted(inbox_dir.glob("*.md")):
+    job_inbox = inbox_dir / job_id if job_id != "default" else None
+    if job_inbox and job_inbox.exists():
+        glob_files = sorted(job_inbox.glob("*.md"))
+    else:
+        glob_files = sorted(set(inbox_dir.glob("*.md")) | set(inbox_dir.glob("*/*.md")))
+    for md_file in glob_files:
         try:
             post = fm.load(str(md_file))
             if post.metadata.get("status") == "retry":
@@ -359,7 +383,7 @@ async def retry_failed(
                 save_json(output_dir / f"{campaign.slug}.json", data)
 
                 # Overwrite inbox note
-                write_inbox_note(data, vault_path)
+                write_inbox_note(data, vault_path, job_id=job_id if job_id != "default" else None)
                 copy_images_to_vault(
                     data.get("image_paths", []), output_dir, vault_path
                 )

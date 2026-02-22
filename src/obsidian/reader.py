@@ -14,8 +14,14 @@ import frontmatter
 logger = logging.getLogger(__name__)
 
 
-def read_inbox_notes(vault_path: Path, status: str = "raw") -> list[dict]:
+def read_inbox_notes(vault_path: Path, status: str = "raw", job_id: str | None = None) -> list[dict]:
     """Read all inbox notes matching the given status.
+
+    Args:
+        vault_path: Obsidian vault root path.
+        status: Filter by frontmatter status field.
+        job_id: If provided, only read from inbox/{job_id}/.
+                If None, read from inbox/**/*.md (recursive) + inbox/*.md (back-compat).
 
     Returns list of dicts with 'metadata' (frontmatter) and 'content' (body text).
     """
@@ -24,8 +30,14 @@ def read_inbox_notes(vault_path: Path, status: str = "raw") -> list[dict]:
         logger.warning(f"Inbox directory not found: {inbox_dir}")
         return []
 
+    if job_id:
+        md_files = sorted((inbox_dir / job_id).glob("*.md")) if (inbox_dir / job_id).exists() else []
+    else:
+        # Recursive glob for subfolders + top-level files (back-compat)
+        md_files = sorted(set(inbox_dir.glob("*.md")) | set(inbox_dir.glob("*/*.md")))
+
     notes = []
-    for md_file in sorted(inbox_dir.glob("*.md")):
+    for md_file in md_files:
         try:
             post = frontmatter.load(str(md_file))
             note_status = post.metadata.get("status", "")
@@ -43,8 +55,13 @@ def read_inbox_notes(vault_path: Path, status: str = "raw") -> list[dict]:
     return notes
 
 
-def read_campaign_notes(vault_path: Path) -> list[dict]:
+def read_campaign_notes(vault_path: Path, job_id: str | None = None) -> list[dict]:
     """Read all campaign notes from campaigns/ directory.
+
+    Args:
+        vault_path: Obsidian vault root path.
+        job_id: If provided, only read from campaigns/{job_id}/.
+                If None, read from campaigns/**/*.md (recursive) + campaigns/*.md (back-compat).
 
     Returns list of dicts with 'metadata' (frontmatter) and 'content' (body text).
     """
@@ -53,8 +70,13 @@ def read_campaign_notes(vault_path: Path) -> list[dict]:
         logger.warning(f"Campaigns directory not found: {campaigns_dir}")
         return []
 
+    if job_id:
+        md_files = sorted((campaigns_dir / job_id).glob("*.md")) if (campaigns_dir / job_id).exists() else []
+    else:
+        md_files = sorted(set(campaigns_dir.glob("*.md")) | set(campaigns_dir.glob("*/*.md")))
+
     notes = []
-    for md_file in sorted(campaigns_dir.glob("*.md")):
+    for md_file in md_files:
         try:
             post = frontmatter.load(str(md_file))
             notes.append({

@@ -45,11 +45,11 @@ def _sanitize_filename(title: str) -> str:
     return name or "Untitled"
 
 
-def write_inbox_note(data: dict, vault_path: Path) -> Path:
+def write_inbox_note(data: dict, vault_path: Path, job_id: str | None = None, status_override: str | None = None) -> Path:
     """Write a raw inbox note from scraped campaign data.
 
-    Creates vault/inbox/{slug}.md with full metadata in frontmatter
-    and all content sections preserved verbatim.
+    Creates vault/inbox/{job_id}/{slug}.md (or vault/inbox/{slug}.md if no job_id)
+    with full metadata in frontmatter and all content sections preserved verbatim.
     """
     slug = data.get("slug", "untitled")
     title = data.get("title", slug)
@@ -78,7 +78,7 @@ def write_inbox_note(data: dict, vault_path: Path) -> Path:
         "source_url": data.get("url", ""),
         "source": "lovethework",
         "video_urls": data.get("video_urls", []),
-        "status": "raw",
+        "status": status_override or "raw",
     }
     # Remove empty values for cleaner frontmatter
     meta = {k: v for k, v in meta.items() if v or k == "status"}
@@ -117,6 +117,8 @@ def write_inbox_note(data: dict, vault_path: Path) -> Path:
     post = frontmatter.Post(content, **meta)
 
     out_dir = vault_path / "inbox"
+    if job_id:
+        out_dir = out_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{slug}.md"
     out_path.write_text(frontmatter.dumps(post), encoding="utf-8")
@@ -134,11 +136,12 @@ def write_campaign_note(
     raw_data: dict,
     llm_data: dict,
     vault_path: Path,
+    job_id: str | None = None,
 ) -> Path:
     """Write a processed campaign note from raw + LLM data.
 
-    Creates vault/campaigns/{Title}.md with structured summary.
-    Filename uses readable title (not slug).
+    Creates vault/campaigns/{job_id}/{Title}.md (or vault/campaigns/{Title}.md if no job_id)
+    with structured summary. Filename uses readable title (not slug).
     Layout: Title → 概要 → Awards → Images → 全体像 → Details → Techniques → Themes → Media
     """
     slug = raw_data.get("slug", llm_data.get("campaign_id", "untitled"))
@@ -295,6 +298,8 @@ def write_campaign_note(
     # Use readable title as filename (not slug)
     filename = _sanitize_filename(title)
     out_dir = vault_path / "campaigns"
+    if job_id:
+        out_dir = out_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{filename}.md"
     out_path.write_text(frontmatter.dumps(post), encoding="utf-8")

@@ -112,13 +112,20 @@ async def extract_idea_formula(
     limit: int | None = None,
     batch_size: int = 5,
     batch_delay: float = 1.5,
+    job_id: str | None = None,
 ):
-    """Extract idea-making formula from existing campaign notes."""
+    """Extract idea-making formula from existing campaign notes.
+
+    Args:
+        job_id: If provided, only process campaigns/{job_id}/.
+    """
     provider = create_provider()
     template = load_prompt_template("idea_formula")
     progress = FormulaProgress()
 
     campaigns_dir = vault_path / "campaigns"
+    if job_id:
+        campaigns_dir = campaigns_dir / job_id
     if not campaigns_dir.exists():
         logger.error(f"Campaigns directory not found: {campaigns_dir}")
         return progress
@@ -221,6 +228,7 @@ if __name__ == "__main__":
 
     vault = settings.vault_path
     limit = None
+    job_id = None
 
     args = sys.argv[1:]
     i = 0
@@ -231,13 +239,16 @@ if __name__ == "__main__":
         elif args[i] == "--limit" and i + 1 < len(args):
             limit = int(args[i + 1])
             i += 2
+        elif args[i] == "--job" and i + 1 < len(args):
+            job_id = args[i + 1]
+            i += 2
         else:
             print(f"Unknown argument: {args[i]}")
-            print("Usage: python -m src.llm.idea_formula --vault <path> [--limit N]")
+            print("Usage: python -m src.llm.idea_formula --vault <path> [--job JOB] [--limit N]")
             sys.exit(1)
 
     async def _main():
-        progress = await extract_idea_formula(vault, limit=limit)
+        progress = await extract_idea_formula(vault, limit=limit, job_id=job_id)
         print(f"\nDone: {progress.completed} processed, {progress.skipped} skipped, {progress.failed} failed")
         if progress.errors:
             print("Errors:")
