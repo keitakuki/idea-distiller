@@ -284,9 +284,9 @@ source: manual
 
 ```bash
 # スクレイピング（→ inbox/{job_id}/ に書き込み）
-python -m src.scraper.cannes <year> [job_id] [festival] [max_pages]
+python -m src.scraper.cannes <year> [job_id] [festival] [max_pages] [--timeout MS]
 python -m src.scraper.cannes --url '<library_url>' [job_id]
-python -m src.scraper.cannes --retry [job_id]                    # status:retry を再スクレイプ
+python -m src.scraper.cannes --retry [job_id] [--timeout MS]      # status:retry を再スクレイプ
 
 # LLM処理（--job でジョブ単位にフィルタ）
 python -m src.llm.processor --vault <vault_path> [--job <job_id>]

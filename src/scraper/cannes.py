@@ -97,6 +97,7 @@ async def scrape_campaigns(
     skip_slugs: set[str] | None = None,
     max_pages: int | None = None,
     vault_path: Path | None = None,
+    timeout: int | None = None,
 ) -> AsyncIterator[tuple[ScrapedCampaign | None, ScrapeProgress]]:
     """Scrape all campaigns from the Campaign Library.
 
@@ -112,11 +113,13 @@ async def scrape_campaigns(
         skip_slugs: Set of slugs to skip (for resume support).
         max_pages: Maximum number of listing pages to scrape (None = all).
         vault_path: Obsidian vault path. If provided, also writes inbox notes.
+        timeout: Page navigation timeout in ms. Overrides config if provided.
 
     Yields (campaign, progress) tuples. campaign is None on failure.
     """
     output_dir = output_dir or settings.raw_dir / job_id
     vault_path = vault_path or (settings.vault_path if settings.obsidian_vault_path else None)
+    page_timeout = timeout or settings.scraper_timeout
     images_dir = output_dir / "images"
     skip_slugs = skip_slugs or set()
     progress = ScrapeProgress()
@@ -147,7 +150,7 @@ async def scrape_campaigns(
         await page.goto(
             first_page_url,
             wait_until="domcontentloaded",
-            timeout=settings.scraper_timeout,
+            timeout=page_timeout,
         )
         await _human_delay(3.0)
 
@@ -190,7 +193,7 @@ async def scrape_campaigns(
                 await page.goto(
                     next_url,
                     wait_until="domcontentloaded",
-                    timeout=settings.scraper_timeout,
+                    timeout=page_timeout,
                 )
                 await _human_delay(settings.scraper_delay)
                 await _scroll_to_load_all(page, max_rounds=10, timeout_s=20)
@@ -226,7 +229,7 @@ async def scrape_campaigns(
                 await page.goto(
                     entry.url,
                     wait_until="networkidle",
-                    timeout=settings.scraper_timeout,
+                    timeout=page_timeout,
                 )
                 await _human_delay(settings.scraper_delay)
 
@@ -412,23 +415,37 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    if len(sys.argv) < 2:
-        print("Usage: python -m src.scraper.cannes <year> [job_id] [max_pages]")
-        print("  or:  python -m src.scraper.cannes --retry [job_id]")
+    # Parse --timeout from anywhere in args
+    timeout_ms = None
+    filtered_args = []
+    raw_args = sys.argv[1:]
+    i = 0
+    while i < len(raw_args):
+        if raw_args[i] == "--timeout" and i + 1 < len(raw_args):
+            timeout_ms = int(raw_args[i + 1])
+            i += 2
+            continue
+        filtered_args.append(raw_args[i])
+        i += 1
+
+    if not filtered_args:
+        print("Usage: python -m src.scraper.cannes <year> [job_id] [max_pages] [--timeout MS]")
+        print("  or:  python -m src.scraper.cannes --retry [job_id] [--timeout MS]")
         print("  or:  python -m src.scraper.cannes --url <library_url> [job_id]")
         print()
         print("Examples:")
         print("  python -m src.scraper.cannes 2025")
+        print("  python -m src.scraper.cannes 2025 --timeout 60000")
         print("  python -m src.scraper.cannes --retry cannes2025")
         sys.exit(1)
 
-    if sys.argv[1] == "--retry":
-        job_id = sys.argv[2] if len(sys.argv) > 2 else "default"
+    if filtered_args[0] == "--retry":
+        job_id = filtered_args[1] if len(filtered_args) > 1 else "default"
 
         async def _main_retry():
             v_path = settings.vault_path
             count = 0
-            async for campaign, progress in retry_failed(v_path, job_id=job_id):
+            async for campaign, progress in retry_failed(v_path, job_id=job_id, timeout=timeout_ms or 60000):
                 if campaign:
                     count += 1
                     print(f"  [{count}/{progress.total_campaigns}] {campaign.title}")
@@ -438,9 +455,9 @@ if __name__ == "__main__":
 
         asyncio.run(_main_retry())
 
-    elif sys.argv[1] == "--url":
-        url = sys.argv[2]
-        job_id = sys.argv[3] if len(sys.argv) > 3 else "test"
+    elif filtered_args[0] == "--url":
+        url = filtered_args[1]
+        job_id = filtered_args[2] if len(filtered_args) > 2 else "test"
         year = None
         festival = "Cannes Lions"
         max_pages_arg = None
@@ -455,6 +472,7 @@ if __name__ == "__main__":
                 year=year,
                 max_pages=max_pages_arg,
                 vault_path=v_path,
+                timeout=timeout_ms,
             ):
                 if campaign:
                     count += 1
@@ -468,10 +486,10 @@ if __name__ == "__main__":
 
     else:
         url = None
-        year = int(sys.argv[1])
-        job_id = sys.argv[2] if len(sys.argv) > 2 else f"cannes{year}"
-        festival = sys.argv[3] if len(sys.argv) > 3 else "Cannes Lions"
-        max_pages_arg = int(sys.argv[4]) if len(sys.argv) > 4 else None
+        year = int(filtered_args[0])
+        job_id = filtered_args[1] if len(filtered_args) > 1 else f"cannes{year}"
+        festival = filtered_args[2] if len(filtered_args) > 2 else "Cannes Lions"
+        max_pages_arg = int(filtered_args[3]) if len(filtered_args) > 3 else None
 
         async def _main():
             v_path = settings.vault_path if settings.obsidian_vault_path else None
@@ -483,6 +501,7 @@ if __name__ == "__main__":
                 year=year,
                 max_pages=max_pages_arg,
                 vault_path=v_path,
+                timeout=timeout_ms,
             ):
                 if campaign:
                     count += 1
