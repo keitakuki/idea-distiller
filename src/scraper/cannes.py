@@ -228,10 +228,12 @@ async def scrape_campaigns(
             try:
                 await page.goto(
                     entry.url,
-                    wait_until="networkidle",
+                    wait_until="load",
                     timeout=page_timeout,
                 )
-                await _human_delay(settings.scraper_delay)
+                # Extra wait for dynamic content (networkidle is too strict
+                # and times out when the site rate-limits background requests)
+                await _human_delay(settings.scraper_delay + 2.0)
 
                 campaign = await parse_campaign_page(page, entry)
 
@@ -360,8 +362,8 @@ async def retry_failed(
                 year=note["year"],
             )
             try:
-                await page.goto(note["url"], wait_until="networkidle", timeout=timeout)
-                await _human_delay(settings.scraper_delay)
+                await page.goto(note["url"], wait_until="load", timeout=timeout)
+                await _human_delay(settings.scraper_delay + 2.0)
 
                 campaign = await parse_campaign_page(page, entry)
 
