@@ -184,9 +184,12 @@ python -m src.scraper.cannes 2025
 python -m src.scraper.cannes 2025 cannes2025 'cannes lions' 3
 ```
 
-- 1ページ≒24件、2-3秒/件
+- 1ページ≒24件、Phase 2は15-20秒/件（画像DL込み）
 - 全ページ数は実行時にログ出力される
-- 中断しても再開可能（既存slugはスキップ）
+- 再実行すると同じslugは上書き（スキップではない）。新規分が追加される
+- **セッションは長時間スクレイプ中に切れることがある**（Step 1前に必ず `setup check`）
+- **レートリミット**: 40-100件でサイト側が制限開始。コンテンツ空のものは `status: retry` で保存される
+- 1回のスクレイプで全件取得は困難。`--retry` を複数回実行して徐々に回収する運用が現実的
 
 #### Step 2: LLM 処理
 
@@ -274,7 +277,11 @@ source: manual
 | 症状 | 対処 |
 |---|---|
 | スクレイプで0件 | `python -m src.scraper.setup check` でログイン確認 |
+| スクレイプで件数が少ない | Phase 1のリスト取得で全ページ巡回できたかログ確認。セッション切れや遅延でページネーション失敗の可能性あり。再実行で新規分が追加される |
+| セッション切れ | 長時間スクレイプ中に期限切れになる。`setup login` で再ログイン後、再実行すれば続きから取得 |
+| レートリミットで大量retry | 時間を置いて `--retry` を複数周回す。最終的に残るのはpaywall（真にアクセス不可） |
 | LLM処理が0件 | inboxに `status: raw` のファイルがあるか確認 |
+| LLM処理で大量スキップ | 品質ゲートがコンテンツ不足のraw を検出しretryに変更。正常動作 |
 | 画像が表示されない | `attachments/` にファイルがあるか確認。Obsidianの添付ファイルフォルダ設定を確認 |
 | タグが重複 | `_tags.yaml` を手動編集して統合後、campaigns/ のfrontmatterも修正 |
 | LLMがタイトルだけから捏造 | `healthcheck --fix` でゴースト検出→inbox を retry に戻し偽 campaign を削除→リトライ |
@@ -345,16 +352,22 @@ python -m src.main
 ```bash
 JOB=cannes2025
 
+# Step 0: セッション確認（必須）
+python -m src.scraper.setup check
+# EXPIRED なら → python -m src.scraper.setup login
+
 # Step 1: スクレイプ
 python -m src.scraper.cannes <year>
+# ※ 1回で全件取得は困難。40-100件でレートリミット発動
+# ※ セッション切れで0件なら再ログイン後に再実行
 
-# Step 2: LLM処理
+# Step 2: LLM処理（処理対象のみ自動フィルタ）
 python -m src.llm.processor --vault "$VAULT" --job $JOB
 
-# Step 2.5: アイデアの作り方
+# Step 2.5: アイデアの作り方（未抽出のみ）
 python -m src.llm.idea_formula --vault "$VAULT" --job $JOB
 
-# Step 2.7: 和訳
+# Step 2.7: 和訳（未翻訳のみ）
 python -m src.llm.translator --vault "$VAULT" --job $JOB
 
 # Step 3: インデックス（全年横断）
@@ -363,18 +376,36 @@ python -m src.obsidian.index "$VAULT"
 # Step 4: ヘルスチェック
 python -m src.scraper.healthcheck "$VAULT" --job $JOB --fix
 
-# Step 5: リトライ（parser_failure があれば）
-python -m src.scraper.cannes --retry $JOB
-
-# Step 6: リトライ後の再処理
-python -m src.llm.translator --vault "$VAULT" --job $JOB
+# Step 5: retryサイクル（時間を置いて繰り返す）
+python -m src.scraper.setup check                          # セッション確認
+python -m src.scraper.cannes --retry $JOB                  # retry分を再スクレイプ
+python -m src.llm.processor --vault "$VAULT" --job $JOB    # 新規rawをLLM処理
+python -m src.llm.idea_formula --vault "$VAULT" --job $JOB # アイデアの作り方
+python -m src.llm.translator --vault "$VAULT" --job $JOB   # 和訳
 python -m src.scraper.healthcheck "$VAULT" --job $JOB --fix
+# ※ retryで回収できなくなったら残りはpaywall。ここで打ち切り
 
-# Step 7: インデックス再生成
+# Step 6: インデックス再生成
 python -m src.obsidian.index "$VAULT"
 
-# Step 8: アーカイブ（オプション、完了後のバックアップ）
+# Step 7: アーカイブ（オプション、完了後のバックアップ）
 python scripts/archive_job.py $JOB
+```
+
+### 複数年一括処理
+
+```bash
+# 複数年を順次スクレイプ（各年でセッション確認推奨）
+for YEAR in 2020 2021 2022 2023 2024; do
+  python -m src.scraper.setup check
+  python -m src.scraper.cannes $YEAR
+done
+
+# LLM処理以降は各ステップを全年分回す
+for JOB in cannes2020 cannes2021 cannes2022 cannes2023 cannes2024; do
+  python -m src.llm.processor --vault "$VAULT" --job $JOB
+done
+# idea_formula, translator, healthcheck も同様
 ```
 
 ### 処理状態の確認
@@ -406,6 +437,49 @@ python -m src.scraper.healthcheck "$VAULT" --job cannes2025
 4. `campaigns/` の frontmatter で該当メソッド名を置換
 5. `python -m src.obsidian.index "$VAULT"` でインデックス再生成
 6. `methods/` の不要MOCファイルを削除
+
+## 対応フェスティバル
+
+Love the Work (`lovethework.com`) には複数のLionsフェスティバルが掲載されている。
+現在のスクレイパーは `festival` パラメータで切り替え可能。
+
+| フェスティバル | festival引数 | 年間キャンペーン数(GP/Gold/Silver) |
+|---|---|---|
+| **Cannes Lions** | `cannes lions`（デフォルト） | 140-290件/年 |
+| Eurobest | `eurobest` | 70-100件/年 |
+| Dubai Lynx | `dubai lynx` | 48-72件/年 |
+| Spikes Asia | `spikes asia` | 0-96件/年 |
+
+```bash
+# 例: Eurobest 2024をスクレイプ
+python -m src.scraper.cannes 2024 eurobest2024 eurobest
+```
+
+※ 現在は Cannes Lions のみ運用中。他フェスティバルは未テスト。
+
+## スクレイプの制約と運用パターン
+
+### レートリミット
+- サイトは40-100件のPhase 2（詳細ページ）スクレイプ後にレート制限を開始
+- 制限時: タブ切り替え失敗 → コンテンツ空 → `status: retry` で保存
+- 1回のスクレイプで全件取得は困難。**複数回のretryサイクルで徐々に回収**する
+
+### セッション管理
+- ログインセッションは数時間で期限切れ
+- 長時間スクレイプ（200件超、1時間以上）中にセッション切れが発生しうる
+- **Step 1前に必ず `setup check`** → EXPIRED なら `setup login`
+
+### Phase 1（リスト取得）の注意点
+- Phase 1でページネーション全ページを巡回してキャンペーンURLリストを構築
+- セッション切れや遅延でPhase 1が途中終了すると、**キャンペーンリスト自体が不完全**になる
+- 症状: 特定年の件数が異常に少ない（例: 本来200件のところ40件）
+- 対処: 新しいセッションで再実行すれば、Phase 1が最初から走り全ページ取得できる
+
+### 典型的な回収率（Cannes Lions）
+- Phase 1（リスト取得）: ほぼ100%（セッションが有効なら）
+- Phase 2（詳細スクレイプ）初回: 60-80%
+- Phase 2（--retry 1回目）: +10-20%
+- 最終的な残り: paywall（真にアクセス不可）
 
 ## 設定
 
